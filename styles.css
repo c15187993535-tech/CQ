@@ -453,10 +453,6 @@ blockquote {
     padding-top: 54px;
   }
 
-  .signal-panel {
-    order: -1;
-  }
-
   .contact-layout {
     gap: 18px;
   }
