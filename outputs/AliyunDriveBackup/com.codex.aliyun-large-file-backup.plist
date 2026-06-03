@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.codex.aliyun-large-file-backup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/mac/bin/CodexAliyunBackup/auto_backup_large_files.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CODEX_REPO_ROOT</key>
+    <string>/Users/mac/Documents/Codex/2026-06-03/git</string>
+    <key>CODEX_BACKUP_ROOT</key>
+    <string>/Users/mac/Documents/Codex/2026-06-03/git/outputs/AliyunDriveBackup</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/Users/mac/Documents/Codex/2026-06-03/git</string>
+  <key>StartInterval</key>
+  <integer>18000</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/mac/Documents/Codex/2026-06-03/git/outputs/AliyunDriveBackup/logs/auto-backup.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/mac/Documents/Codex/2026-06-03/git/outputs/AliyunDriveBackup/logs/auto-backup.err.log</string>
+</dict>
+</plist>

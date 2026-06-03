@@ -1,0 +1,12 @@
+*
+!.gitignore
+!README.md
+!sync_to_aliyun.py
+!sync_to_aliyun.command
+!auto_backup_large_files.py
+!auto_backup_large_files.command
+!com.codex.aliyun-large-file-backup.plist
+!*/
+!*/.gitkeep
+logs/*
+!logs/.gitkeep

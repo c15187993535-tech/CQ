@@ -1,0 +1,12 @@
+/.DS_Store
+**/.DS_Store
+outputs/AliyunDriveBackup/**
+!outputs/AliyunDriveBackup/
+!outputs/AliyunDriveBackup/README.md
+!outputs/AliyunDriveBackup/.gitignore
+!outputs/AliyunDriveBackup/sync_to_aliyun.py
+!outputs/AliyunDriveBackup/sync_to_aliyun.command
+!outputs/AliyunDriveBackup/auto_backup_large_files.py
+!outputs/AliyunDriveBackup/auto_backup_large_files.command
+!outputs/AliyunDriveBackup/*/
+!outputs/AliyunDriveBackup/*/.gitkeep

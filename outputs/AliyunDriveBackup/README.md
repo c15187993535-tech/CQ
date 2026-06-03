@@ -13,7 +13,14 @@ Recommended use:
 Suggested workflow:
 
 1. Put large files into the right folder here.
-2. Open Aliyun Drive on your Mac.
-3. Upload or sync this whole `AliyunDriveBackup` folder.
-4. Keep code and small text files in GitHub; keep big files in Aliyun Drive.
+2. Run `auto_backup_large_files.command`, or let the automatic sync task run.
+3. Keep code and small text files in GitHub; keep big files in Aliyun Drive.
+4. Git only tracks this folder structure and sync scripts. Files placed in the category folders are ignored by Git and uploaded to Aliyun Drive.
 
+Automatic large-file rule:
+
+- Files generated under `work/` or `outputs/` that are 50 MB or larger are moved here automatically.
+- Archives go to `archives/`.
+- Media files go to `media/`.
+- Documents go to `documents/`.
+- Other large files go to `large-files/`.
