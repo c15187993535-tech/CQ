@@ -10,6 +10,7 @@
     "start": "node ./src/index.js",
     "google:auth-url": "node ./scripts/google-auth.js url",
     "google:token": "node ./scripts/google-auth.js token",
+    "google:import-credentials": "node ./scripts/google-import-credentials.js",
     "check": "node --check ./src/index.js"
   },
   "dependencies": {

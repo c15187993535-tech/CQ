@@ -11,6 +11,7 @@ const defaultGithubOwner = process.env.GITHUB_OWNER || "c15187993535-tech";
 const googleConfigDir = path.resolve(process.env.GOOGLE_MCP_CONFIG_DIR || path.join(process.env.HOME || ".", ".config", "personal-mcp"));
 const googleCredentialsPath = path.resolve(process.env.GOOGLE_OAUTH_CREDENTIALS || path.join(googleConfigDir, "google_credentials.json"));
 const googleTokenPath = path.resolve(process.env.GOOGLE_OAUTH_TOKEN || path.join(googleConfigDir, "google_token.json"));
+const googleProxy = process.env.GOOGLE_MCP_PROXY || "";
 
 function text(content) {
   return { content: [{ type: "text", text: String(content ?? "") }] };
@@ -166,15 +167,11 @@ async function refreshGoogleToken(credentials, token) {
     refresh_token: token.refresh_token,
     grant_type: "refresh_token",
   });
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const body = await curlJson("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params,
+    body: params.toString(),
   });
-  const body = await response.json();
-  if (!response.ok) {
-    throw new Error(`Google token refresh failed: ${body.error_description || body.error || response.status}`);
-  }
   const updated = {
     ...token,
     ...body,
@@ -182,6 +179,34 @@ async function refreshGoogleToken(credentials, token) {
   };
   await saveGoogleToken(updated);
   return updated;
+}
+
+async function curlJson(url, options = {}) {
+  const args = ["-sS"];
+  if (googleProxy) args.push("-x", googleProxy);
+  if (options.method) args.push("-X", options.method);
+  for (const [name, value] of Object.entries(options.headers || {})) {
+    args.push("-H", `${name}: ${value}`);
+  }
+  if (options.body !== undefined) {
+    args.push("--data-binary", "@-");
+  }
+  args.push(url);
+  const result = await runCommand("curl", args, {
+    input: options.body,
+    timeoutMs: 45_000,
+  });
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`Google API returned non-JSON response: ${result.stdout.slice(0, 200)}`);
+  }
+  if (parsed?.error) {
+    const message = parsed.error_description || parsed.error?.message || parsed.error;
+    throw new Error(`Google API error: ${message}`);
+  }
+  return parsed;
 }
 
 async function googleAccessToken() {
@@ -195,26 +220,15 @@ async function googleAccessToken() {
 
 async function googleRequest(url, options = {}) {
   const accessToken = await googleAccessToken();
-  const response = await fetch(url, {
-    ...options,
+  return await curlJson(url, {
+    method: options.method,
+    body: options.body,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
       ...(options.headers || {}),
     },
   });
-  const body = await response.text();
-  let parsed;
-  try {
-    parsed = body ? JSON.parse(body) : null;
-  } catch {
-    parsed = body;
-  }
-  if (!response.ok) {
-    const message = typeof parsed === "object" && parsed?.error?.message ? parsed.error.message : body;
-    throw new Error(`Google API ${response.status}: ${message}`);
-  }
-  return parsed;
 }
 
 const server = new McpServer({
