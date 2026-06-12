@@ -17,6 +17,15 @@ npm install
 npm start
 ```
 
+## Test and audit
+
+```bash
+npm test
+npm audit --omit=dev --audit-level=moderate
+```
+
+`npm test` creates temporary Obsidian, Google OAuth, and SQLite fixtures, starts the MCP server through the official SDK client, verifies core tools and readonly protections, then scans tracked project files for common secret patterns.
+
 ## Codex config
 
 ```toml

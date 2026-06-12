@@ -249,6 +249,35 @@ npm run check
 src/index.js
 scripts/google-auth.js
 scripts/google-import-credentials.js
+tests/run.mjs
+```
+
+### 自动化回归测试与安全审计
+
+```bash
+cd "/Users/mac/Documents/MCP 建设/personal-mcp"
+npm test
+npm audit --omit=dev --audit-level=moderate
+```
+
+`npm test` 会自动创建临时 fixture，不污染真实数据：
+
+```text
+临时 Obsidian vault
+临时 Google OAuth credentials/token
+临时 SQLite 数据库
+```
+
+覆盖内容：
+
+```text
+MCP 工具注册数量 = 27
+Obsidian 读/写/路径越权拦截
+SQLite 列库/列表/字段结构/聚合查询
+SQLite DELETE、多语句、越权路径拦截
+Google 本地 OAuth 文件状态
+mcp_health_check(includeNetwork=false)
+Git 跟踪文件中的常见密钥模式扫描
 ```
 
 ### MCP 全链路健康检查
@@ -569,6 +598,8 @@ GitHub fallbackAvailable=true
 ```text
 TOOLS_COUNT=27
 SQLite tools=ok
+npm test=passed
+npm audit=0 vulnerabilities
 mcp_health_check=status ok
 github=ok
 lark=ok
