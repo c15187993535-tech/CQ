@@ -8,6 +8,9 @@ import { z } from "zod";
 
 const vaultRoot = path.resolve(process.env.OBSIDIAN_VAULT_PATH || "/Users/mac/Desktop/知识库");
 const defaultGithubOwner = process.env.GITHUB_OWNER || "c15187993535-tech";
+const googleConfigDir = path.resolve(process.env.GOOGLE_MCP_CONFIG_DIR || path.join(process.env.HOME || ".", ".config", "personal-mcp"));
+const googleCredentialsPath = path.resolve(process.env.GOOGLE_OAUTH_CREDENTIALS || path.join(googleConfigDir, "google_credentials.json"));
+const googleTokenPath = path.resolve(process.env.GOOGLE_OAUTH_TOKEN || path.join(googleConfigDir, "google_token.json"));
 
 function text(content) {
   return { content: [{ type: "text", text: String(content ?? "") }] };
@@ -121,6 +124,97 @@ async function githubRequest(endpoint, options = {}) {
 function repoParts(repository) {
   if (!repository.includes("/")) return `${defaultGithubOwner}/${repository}`;
   return repository;
+}
+
+async function readJsonFile(filePath) {
+  return JSON.parse(await fs.readFile(filePath, "utf8"));
+}
+
+async function loadGoogleCredentials() {
+  let raw;
+  try {
+    raw = await readJsonFile(googleCredentialsPath);
+  } catch {
+    throw new Error(`Google OAuth credentials not found at ${googleCredentialsPath}. Create an OAuth client and save credentials.json there.`);
+  }
+  const config = raw.installed || raw.web;
+  if (!config?.client_id || !config?.client_secret) {
+    throw new Error("Google OAuth credentials file must contain installed or web client_id/client_secret.");
+  }
+  const redirectUri = config.redirect_uris?.[0] || "http://localhost";
+  return { clientId: config.client_id, clientSecret: config.client_secret, redirectUri };
+}
+
+async function loadGoogleToken() {
+  try {
+    return await readJsonFile(googleTokenPath);
+  } catch {
+    throw new Error(`Google OAuth token not found at ${googleTokenPath}. Run: npm run google:auth-url, then npm run google:token -- "<code>"`);
+  }
+}
+
+async function saveGoogleToken(token) {
+  await fs.mkdir(path.dirname(googleTokenPath), { recursive: true });
+  await fs.writeFile(googleTokenPath, JSON.stringify(token, null, 2), { mode: 0o600 });
+}
+
+async function refreshGoogleToken(credentials, token) {
+  if (!token.refresh_token) return token;
+  const params = new URLSearchParams({
+    client_id: credentials.clientId,
+    client_secret: credentials.clientSecret,
+    refresh_token: token.refresh_token,
+    grant_type: "refresh_token",
+  });
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params,
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(`Google token refresh failed: ${body.error_description || body.error || response.status}`);
+  }
+  const updated = {
+    ...token,
+    ...body,
+    expires_at: Date.now() + ((body.expires_in || 3600) * 1000),
+  };
+  await saveGoogleToken(updated);
+  return updated;
+}
+
+async function googleAccessToken() {
+  const credentials = await loadGoogleCredentials();
+  let token = await loadGoogleToken();
+  if (!token.access_token || Date.now() > (token.expires_at || 0) - 60_000) {
+    token = await refreshGoogleToken(credentials, token);
+  }
+  return token.access_token;
+}
+
+async function googleRequest(url, options = {}) {
+  const accessToken = await googleAccessToken();
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  const body = await response.text();
+  let parsed;
+  try {
+    parsed = body ? JSON.parse(body) : null;
+  } catch {
+    parsed = body;
+  }
+  if (!response.ok) {
+    const message = typeof parsed === "object" && parsed?.error?.message ? parsed.error.message : body;
+    throw new Error(`Google API ${response.status}: ${message}`);
+  }
+  return parsed;
 }
 
 const server = new McpServer({
@@ -383,6 +477,102 @@ server.tool(
   },
 );
 
+server.tool(
+  "google_auth_status",
+  "Show local Google OAuth credential/token file status.",
+  {},
+  async () => {
+    const status = {
+      credentialsPath: googleCredentialsPath,
+      tokenPath: googleTokenPath,
+      credentialsExists: false,
+      tokenExists: false,
+    };
+    try {
+      await fs.access(googleCredentialsPath);
+      status.credentialsExists = true;
+    } catch {}
+    try {
+      const token = await loadGoogleToken();
+      status.tokenExists = true;
+      status.hasRefreshToken = Boolean(token.refresh_token);
+      status.expiresAt = token.expires_at ? new Date(token.expires_at).toISOString() : null;
+    } catch {}
+    return json(status);
+  },
+);
+
+server.tool(
+  "google_profile",
+  "Get the current Google Drive user profile.",
+  {},
+  async () => {
+    const profile = await googleRequest("https://www.googleapis.com/drive/v3/about?fields=user");
+    return json(profile.user);
+  },
+);
+
+server.tool(
+  "google_drive_search",
+  "Search files in Google Drive.",
+  {
+    query: z.string().default("").describe("Search text. Empty lists recent files."),
+    limit: z.number().int().min(1).max(100).default(10),
+    mimeType: z.string().optional().describe("Optional exact MIME type filter."),
+  },
+  async ({ query, limit, mimeType }) => {
+    const clauses = ["trashed = false"];
+    if (query) {
+      const safe = query.replaceAll("'", "\\'");
+      clauses.push(`name contains '${safe}'`);
+    }
+    if (mimeType) clauses.push(`mimeType = '${mimeType.replaceAll("'", "\\'")}'`);
+    const params = new URLSearchParams({
+      q: clauses.join(" and "),
+      pageSize: String(limit),
+      orderBy: "modifiedTime desc",
+      fields: "files(id,name,mimeType,modifiedTime,webViewLink,owners(displayName,emailAddress))",
+    });
+    const data = await googleRequest(`https://www.googleapis.com/drive/v3/files?${params}`);
+    return json(data.files || []);
+  },
+);
+
+server.tool(
+  "google_docs_get",
+  "Read a Google Docs document as plain text with basic structural metadata.",
+  {
+    documentId: z.string().describe("Google Docs document ID."),
+  },
+  async ({ documentId }) => {
+    const doc = await googleRequest(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(documentId)}`);
+    const chunks = [];
+    for (const element of doc.body?.content || []) {
+      for (const child of element.paragraph?.elements || []) {
+        if (child.textRun?.content) chunks.push(child.textRun.content);
+      }
+    }
+    return json({
+      title: doc.title,
+      documentId: doc.documentId,
+      text: chunks.join(""),
+    });
+  },
+);
+
+server.tool(
+  "google_sheets_values",
+  "Read values from a Google Sheets range.",
+  {
+    spreadsheetId: z.string(),
+    range: z.string().default("A1:Z100"),
+  },
+  async ({ spreadsheetId, range }) => {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`;
+    const data = await googleRequest(url);
+    return json(data);
+  },
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
-

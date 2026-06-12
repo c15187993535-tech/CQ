@@ -8,6 +8,8 @@
   },
   "scripts": {
     "start": "node ./src/index.js",
+    "google:auth-url": "node ./scripts/google-auth.js url",
+    "google:token": "node ./scripts/google-auth.js token",
     "check": "node --check ./src/index.js"
   },
   "dependencies": {
@@ -15,4 +17,3 @@
     "zod": "^3.25.76"
   }
 }
-
