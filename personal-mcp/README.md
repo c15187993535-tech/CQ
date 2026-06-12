@@ -9,6 +9,7 @@ This MCP server wraps the personal integrations that have already been verified 
 - Google Drive/Docs/Sheets via local OAuth files
 - Web search/fetch via optional Brave Search or free Bing RSS fallback
 - SQLite readonly database inspection/query tools
+- Unified knowledge tools across Obsidian plus optional network-backed sources
 - One-shot health checks across the configured integrations
 
 ## Run
@@ -138,6 +139,25 @@ Mobile workflow:
 ```text
 手机飞书写任务 -> Mac 上 AI 读取待处理 -> AI 调用 personal_mcp 执行 -> 结果写回飞书
 ```
+
+## Unified knowledge tools
+
+These tools provide a single knowledge interface over local Obsidian and optional network-backed sources:
+
+- `knowledge_sources`: list configured sources and capabilities.
+- `knowledge_search`: search sources with one query. Defaults to local Obsidian only.
+- `knowledge_read`: read an Obsidian note, Feishu doc, or web page.
+- `knowledge_write_note`: write Markdown back to the Obsidian vault.
+
+Examples:
+
+```text
+knowledge_search({ "query": "Google OAuth", "sources": "obsidian", "limit": 10 })
+knowledge_read({ "source": "obsidian", "id": "03-工具库/Personal MCP 交接文档 2026-06-12.md" })
+knowledge_write_note({ "notePath": "03-工具库/调研结果.md", "title": "调研结果", "content": "..." })
+```
+
+Set `includeNetwork: true` in `knowledge_search` to include `lark`, `google_drive`, or `web`.
 
 ## Web tools
 

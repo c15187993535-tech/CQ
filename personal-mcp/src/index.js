@@ -224,6 +224,107 @@ async function walkMarkdown(dir, options = {}) {
   return files;
 }
 
+function makeExcerpt(content, query, radius = 160) {
+  const textContent = String(content || "");
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return textContent.slice(0, radius * 2).trim();
+  const idx = textContent.toLowerCase().indexOf(q);
+  if (idx < 0) return textContent.slice(0, radius * 2).trim();
+  return textContent.slice(Math.max(0, idx - radius), Math.min(textContent.length, idx + q.length + radius)).trim();
+}
+
+async function searchObsidianKnowledge(query, options = {}) {
+  const { limit = 10 } = options;
+  const files = await walkMarkdown(vaultRoot);
+  const q = query.toLowerCase();
+  const results = [];
+  for (const file of files) {
+    if (results.length >= limit) break;
+    const rel = path.relative(vaultRoot, file);
+    const content = await fs.readFile(file, "utf8");
+    const haystack = `${rel}\n${content}`.toLowerCase();
+    if (!haystack.includes(q)) continue;
+    const stat = await fs.stat(file);
+    results.push({
+      source: "obsidian",
+      id: rel,
+      title: path.basename(rel, ".md"),
+      path: rel,
+      modifiedAt: stat.mtime.toISOString(),
+      excerpt: makeExcerpt(content, query),
+    });
+  }
+  return results;
+}
+
+async function searchLarkKnowledge(query, options = {}) {
+  const { limit = 5 } = options;
+  const result = await runCommand("lark-cli", [
+    "drive",
+    "+search",
+    "--query",
+    query,
+    "--page-size",
+    String(Math.min(limit, 20)),
+    "--format",
+    "json",
+    "--mine",
+  ], { timeoutMs: 30_000 });
+  const parsed = JSON.parse(result.stdout);
+  const items = parsed.data?.files || parsed.data?.items || parsed.files || parsed.items || [];
+  return items.slice(0, limit).map((item) => ({
+    source: "lark",
+    id: item.token || item.file_token || item.docs_token || item.url || item.web_url || item.name,
+    title: item.name || item.title || "",
+    url: item.url || item.web_url || item.link || "",
+    type: item.type || item.doc_type || item.mime_type || "",
+    modifiedAt: item.modified_time || item.update_time || item.modifiedAt || "",
+    excerpt: item.summary || item.snippet || "",
+    raw: item,
+  }));
+}
+
+async function searchGoogleDriveKnowledge(query, options = {}) {
+  const { limit = 5 } = options;
+  const clauses = ["trashed = false"];
+  if (query) clauses.push(`name contains '${query.replaceAll("'", "\\'")}'`);
+  const params = new URLSearchParams({
+    q: clauses.join(" and "),
+    pageSize: String(Math.min(limit, 100)),
+    orderBy: "modifiedTime desc",
+    fields: "files(id,name,mimeType,modifiedTime,webViewLink)",
+  });
+  const data = await googleRequest(`https://www.googleapis.com/drive/v3/files?${params}`);
+  return (data.files || []).map((file) => ({
+    source: "google_drive",
+    id: file.id,
+    title: file.name,
+    url: file.webViewLink,
+    type: file.mimeType,
+    modifiedAt: file.modifiedTime,
+    excerpt: "",
+  }));
+}
+
+async function searchWebKnowledge(query, options = {}) {
+  const { limit = 5 } = options;
+  const search = await webSearch(query, { limit, market: options.market || "zh-CN", backend: "auto" });
+  return search.results.map((item) => ({
+    source: "web",
+    id: item.url,
+    title: item.title,
+    url: item.url,
+    type: "web_page",
+    modifiedAt: item.publishedAt || "",
+    excerpt: item.snippet || "",
+  }));
+}
+
+function parseKnowledgeSources(sources) {
+  if (Array.isArray(sources)) return sources;
+  return String(sources || "obsidian").split(",").map((source) => source.trim()).filter(Boolean);
+}
+
 async function walkSqliteDatabases(dir, options = {}) {
   const { maxFiles = 200 } = options;
   const files = [];
@@ -1135,6 +1236,149 @@ server.tool(
       status,
       revisionId: response.data?.document?.revision_id,
       url: response.data?.document?.url,
+    });
+  },
+);
+
+server.tool(
+  "knowledge_sources",
+  "List configured personal knowledge sources and their capabilities.",
+  {},
+  async () => json([
+    {
+      source: "obsidian",
+      status: "local",
+      capabilities: ["search", "read", "write"],
+      root: vaultRoot,
+    },
+    {
+      source: "lark",
+      status: "network",
+      capabilities: ["search", "read"],
+      note: "Uses lark-cli Drive search and docs fetch.",
+    },
+    {
+      source: "google_drive",
+      status: "network",
+      capabilities: ["search"],
+      note: "Uses Google Drive metadata search.",
+    },
+    {
+      source: "web",
+      status: "network",
+      capabilities: ["search", "read"],
+      note: "Uses web_search/web_fetch backends.",
+    },
+  ]),
+);
+
+server.tool(
+  "knowledge_search",
+  "Search personal knowledge sources with one query. Defaults to local Obsidian only.",
+  {
+    query: z.string().min(1),
+    sources: z.string().default("obsidian").describe("Comma-separated sources: obsidian,lark,google_drive,web."),
+    limit: z.number().int().min(1).max(50).default(10),
+    includeNetwork: z.boolean().default(false).describe("Allow network-backed sources. Obsidian is always local."),
+  },
+  async ({ query, sources, limit, includeNetwork }) => {
+    const requested = parseKnowledgeSources(sources);
+    const results = [];
+    const errors = [];
+    for (const source of requested) {
+      const remaining = Math.max(1, limit - results.length);
+      try {
+        if (source === "obsidian") {
+          results.push(...await searchObsidianKnowledge(query, { limit: remaining }));
+        } else if (!includeNetwork) {
+          errors.push({ source, error: "Network-backed source skipped because includeNetwork=false." });
+        } else if (source === "lark") {
+          results.push(...await searchLarkKnowledge(query, { limit: remaining }));
+        } else if (source === "google_drive") {
+          results.push(...await searchGoogleDriveKnowledge(query, { limit: remaining }));
+        } else if (source === "web") {
+          results.push(...await searchWebKnowledge(query, { limit: remaining }));
+        } else {
+          errors.push({ source, error: "Unknown knowledge source." });
+        }
+      } catch (error) {
+        errors.push({ source, error: error.message });
+      }
+      if (results.length >= limit) break;
+    }
+    return json({ query, sources: requested, results: results.slice(0, limit), errors });
+  },
+);
+
+server.tool(
+  "knowledge_read",
+  "Read one knowledge item by source and id/path/url.",
+  {
+    source: z.enum(["obsidian", "lark", "web"]),
+    id: z.string().describe("Obsidian note path, Feishu doc URL/token, or web URL."),
+    maxChars: z.number().int().min(500).max(50000).default(12000),
+  },
+  async ({ source, id, maxChars }) => {
+    if (source === "obsidian") {
+      const file = ensureInsideVault(id);
+      const content = await fs.readFile(file, "utf8");
+      return json({
+        source,
+        id,
+        title: path.basename(id, ".md"),
+        chars: content.length,
+        content: content.slice(0, maxChars),
+        truncated: content.length > maxChars,
+      });
+    }
+    if (source === "lark") {
+      const content = await larkFetchMarkdown(id);
+      return json({
+        source,
+        id,
+        chars: content.length,
+        content: content.slice(0, maxChars),
+        truncated: content.length > maxChars,
+      });
+    }
+    const parsed = assertHttpUrl(id);
+    const html = await curlText(parsed.toString(), {
+      userAgent: "Mozilla/5.0 (compatible; personal-mcp/0.1)",
+    });
+    const content = stripHtml(html);
+    return json({
+      source,
+      id: parsed.toString(),
+      chars: content.length,
+      content: content.slice(0, maxChars),
+      truncated: content.length > maxChars,
+    });
+  },
+);
+
+server.tool(
+  "knowledge_write_note",
+  "Write a Markdown note into the Obsidian knowledge vault.",
+  {
+    notePath: z.string().describe("Vault-relative markdown path."),
+    title: z.string().optional(),
+    content: z.string(),
+    mode: z.enum(["overwrite", "append"]).default("overwrite"),
+  },
+  async ({ notePath, title, content, mode }) => {
+    const file = ensureInsideVault(notePath);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const body = title ? `# ${title}\n\n${content.trim()}\n` : `${content.trim()}\n`;
+    if (mode === "append") {
+      await fs.appendFile(file, `\n${body}`, "utf8");
+    } else {
+      await fs.writeFile(file, body, "utf8");
+    }
+    return json({
+      source: "obsidian",
+      path: path.relative(vaultRoot, file),
+      mode,
+      bytes: Buffer.byteLength(body),
     });
   },
 );

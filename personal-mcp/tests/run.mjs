@@ -84,7 +84,7 @@ async function main() {
   const dbPath = path.join(sqliteRoot, "test.sqlite");
 
   await fs.mkdir(path.join(vaultRoot, "06-日常"), { recursive: true });
-  await fs.writeFile(path.join(vaultRoot, "06-日常", "2026-06-12.md"), "# Daily Note\n\nMCP test fixture\n", "utf8");
+  await fs.writeFile(path.join(vaultRoot, "06-日常", "2026-06-12.md"), "# Daily Note\n\nMCP test fixture\n\nKnowledge MCP seed.\n", "utf8");
   await createSqliteFixture(dbPath);
   await writeJson(credentialsPath, {
     installed: {
@@ -133,10 +133,14 @@ async function main() {
       "lark_inbox_fetch_pending",
       "lark_inbox_add_task",
       "lark_inbox_complete_task",
+      "knowledge_sources",
+      "knowledge_search",
+      "knowledge_read",
+      "knowledge_write_note",
     ]) {
       assert.ok(toolNames.includes(expected), `missing MCP tool: ${expected}`);
     }
-    assert.equal(toolNames.length, 32, "unexpected registered MCP tool count");
+    assert.equal(toolNames.length, 36, "unexpected registered MCP tool count");
 
     const inboxTemplate = textResult(await client.callTool({ name: "lark_inbox_template", arguments: {} }));
     assert.match(inboxTemplate, /# AI 指令收件箱/);
@@ -181,11 +185,42 @@ async function main() {
     }));
     assert.equal(allInboxTasks.length, 2);
 
+    const knowledgeSources = parseJsonResult(await client.callTool({ name: "knowledge_sources", arguments: {} }));
+    assert.ok(knowledgeSources.some((source) => source.source === "obsidian" && source.capabilities.includes("write")));
+
+    const knowledgeSearch = parseJsonResult(await client.callTool({
+      name: "knowledge_search",
+      arguments: { query: "Knowledge MCP", sources: "obsidian,web", includeNetwork: false, limit: 10 },
+    }));
+    assert.equal(knowledgeSearch.results.length, 1);
+    assert.equal(knowledgeSearch.results[0].source, "obsidian");
+    assert.equal(knowledgeSearch.errors[0].source, "web");
+
+    const knowledgeRead = parseJsonResult(await client.callTool({
+      name: "knowledge_read",
+      arguments: { source: "obsidian", id: "06-日常/2026-06-12.md", maxChars: 1000 },
+    }));
+    assert.match(knowledgeRead.content, /Knowledge MCP seed/);
+
+    const knowledgeWrite = parseJsonResult(await client.callTool({
+      name: "knowledge_write_note",
+      arguments: {
+        notePath: "03-工具库/knowledge-test.md",
+        title: "Knowledge Test",
+        content: "Unified knowledge write path.",
+        mode: "overwrite",
+      },
+    }));
+    assert.equal(knowledgeWrite.path, "03-工具库/knowledge-test.md");
+    assert.match(await fs.readFile(path.join(vaultRoot, "03-工具库", "knowledge-test.md"), "utf8"), /Unified knowledge write path/);
+    await assertToolError(client, "knowledge_read", { source: "obsidian", id: "../outside.md", maxChars: 1000 }, /outside Obsidian vault/i);
+
     const notes = parseJsonResult(await client.callTool({
       name: "obsidian_list_notes",
       arguments: { subdir: ".", limit: 10 },
     }));
-    assert.deepEqual(notes, ["06-日常/2026-06-12.md"]);
+    assert.ok(notes.includes("06-日常/2026-06-12.md"));
+    assert.ok(notes.includes("03-工具库/knowledge-test.md"));
 
     const dailyNote = textResult(await client.callTool({
       name: "obsidian_read_note",

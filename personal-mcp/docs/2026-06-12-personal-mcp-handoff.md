@@ -14,6 +14,7 @@
 | 飞书 / Lark | 已跑通 | 通过 `lark-cli` 查询认证、日程、云文档、任务 |
 | 飞书 AI 指令收件箱 | 已跑通 | 手机飞书写任务，Mac 上 AI 读取待处理任务并把结果写回 |
 | Google Drive / Docs / Sheets | 已跑通 | 使用本地 OAuth 文件查询账号、搜索 Drive、读取 Docs / Sheets |
+| 统一知识库 MCP | 已跑通 | 统一搜索/读取/写入 Obsidian，并可选接入飞书、Google Drive、网页 |
 | 网页搜索 / 网页读取 | 已跑通 | `web_search` 免费走 Bing RSS；可选 Brave Search；`web_fetch` 抓取网页正文 |
 | SQLite 只读数据库 | 已跑通 | 仅允许访问白名单目录内的 `.db` / `.sqlite` / `.sqlite3`，只支持 `SELECT` / `WITH` 查询 |
 | 健康检查 | 已跑通 | `mcp_health_check` 一键检查整套集成 |
@@ -186,7 +187,7 @@ https://my.feishu.cn/docx/EkRedV11koOJbrxooz9cACasnPe
 lark_inbox_fetch_pending -> 成功读取“示例任务”
 lark_inbox_add_task -> 成功追加“MCP 写回验证”
 lark_inbox_complete_task -> 成功写入结果并标记已完成
-tools_count=32
+tools_count=36
 ```
 
 手机使用方式：
@@ -213,6 +214,38 @@ AI 执行任务后用 lark_inbox_complete_task 写回结果并标记已完成
 06-日常/2026-06-12.md
 ```
 
+### 统一知识库 MCP
+
+本轮新增统一知识库工具，目标是让 AI 不必分别调用 Obsidian / 飞书 / Google Drive / 网页搜索，而是优先通过 `knowledge_*` 工具完成“查资料、读内容、写回知识库”。
+
+新增工具：
+
+```text
+knowledge_sources
+knowledge_search
+knowledge_read
+knowledge_write_note
+```
+
+默认策略：
+
+```text
+knowledge_search 默认只查本地 Obsidian
+includeNetwork=true 后才允许查 lark / google_drive / web
+knowledge_write_note 只写入 Obsidian 白名单知识库路径
+knowledge_read 对 Obsidian 做路径越权保护
+```
+
+已验证：
+
+```text
+knowledge_sources -> 返回 obsidian/lark/google_drive/web
+knowledge_search -> 可搜索 Obsidian 中 Knowledge MCP 测试内容
+knowledge_read -> 可读取 Obsidian 笔记
+knowledge_write_note -> 可写入 Obsidian 笔记
+knowledge_read("../outside.md") -> 被路径保护拦截
+```
+
 ### SQLite
 
 数据库白名单目录：
@@ -236,7 +269,7 @@ AI 执行任务后用 lark_inbox_complete_task 写回结果并标记已完成
 
 ## 5. MCP 工具清单
 
-当前 `personal_mcp` 一共注册 32 个工具：
+当前 `personal_mcp` 一共注册 36 个工具：
 
 ```text
 obsidian_list_notes
@@ -267,6 +300,10 @@ google_profile
 google_drive_search
 google_docs_get
 google_sheets_values
+knowledge_sources
+knowledge_search
+knowledge_read
+knowledge_write_note
 sqlite_list_databases
 sqlite_list_tables
 sqlite_describe_table
@@ -310,8 +347,9 @@ npm audit --omit=dev --audit-level=moderate
 覆盖内容：
 
 ```text
-MCP 工具注册数量 = 32
+MCP 工具注册数量 = 36
 飞书 AI 指令收件箱模板/解析工具
+统一知识库 MCP 搜索/读取/写入/路径保护
 Obsidian 读/写/路径越权拦截
 SQLite 列库/列表/字段结构/聚合查询
 SQLite DELETE、多语句、越权路径拦截
@@ -463,12 +501,34 @@ lark_inbox_complete_task
 验证结果：
 
 ```text
-tools_count=32
+tools_count=36
 lark_inbox_fetch_pending -> 读取到示例任务
 lark_inbox_add_task -> revision_id=5
 lark_inbox_complete_task -> revision_id=7
 任务状态=待处理
 任务优先级=中
+```
+
+## 6.4 统一知识库 MCP 验证
+
+新增 MCP 工具：
+
+```text
+knowledge_sources
+knowledge_search
+knowledge_read
+knowledge_write_note
+```
+
+验证结果：
+
+```text
+tools_count=36
+knowledge_sources -> ok
+knowledge_search(query="Knowledge MCP", sources="obsidian,web", includeNetwork=false) -> 返回 Obsidian 结果并跳过 web
+knowledge_read(source="obsidian") -> 成功读取测试笔记
+knowledge_write_note -> 成功写入 03-工具库/knowledge-test.md
+knowledge_read("../outside.md") -> 被拦截
 ```
 
 ## 7. HTTP JSON 稳定性优化
@@ -667,10 +727,11 @@ GitHub fallbackAvailable=true
 最后一次端到端验证通过：
 
 ```text
-TOOLS_COUNT=32
+TOOLS_COUNT=36
 SQLite tools=ok
 Lark inbox tools=ok
 Lark inbox writeback=ok
+Knowledge tools=ok
 npm test=passed
 npm audit=0 vulnerabilities
 mcp_health_check=status ok
