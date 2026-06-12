@@ -89,12 +89,17 @@ async function runCommand(command, args, options = {}) {
       if (code === 0) {
         resolve({ stdout, stderr, code });
       } else {
-        reject(new Error(`${command} ${args.join(" ")} failed with ${code}\n${stderr || stdout}`));
+        const label = options.errorLabel || `${command} ${args.join(" ")}`;
+        reject(new Error(`${label} failed with ${code}\n${stderr || stdout}`));
       }
     });
     if (input) child.stdin.write(input);
     child.stdin.end();
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function githubRequest(endpoint, options = {}) {
@@ -185,9 +190,20 @@ async function refreshGoogleToken(credentials, token) {
 }
 
 async function curlJson(url, options = {}) {
-  const args = ["-sS"];
+  const statusMarker = "__PERSONAL_MCP_HTTP_STATUS__:";
+  const maxAttempts = options.maxAttempts || 3;
+  const timeoutMs = options.timeoutMs || 45_000;
   const proxy = options.proxy ?? googleProxy;
   const serviceName = options.serviceName || "HTTP API";
+  const args = [
+    "-sS",
+    "-L",
+    "--compressed",
+    "--max-time",
+    String(Math.ceil(timeoutMs / 1000)),
+    "-w",
+    `\n${statusMarker}%{http_code}`,
+  ];
   if (proxy) args.push("-x", proxy);
   if (options.method) args.push("-X", options.method);
   for (const [name, value] of Object.entries(options.headers || {})) {
@@ -197,21 +213,55 @@ async function curlJson(url, options = {}) {
     args.push("--data-binary", "@-");
   }
   args.push(url);
-  const result = await runCommand("curl", args, {
-    input: options.body,
-    timeoutMs: 45_000,
-  });
-  let parsed;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`${serviceName} returned non-JSON response: ${result.stdout.slice(0, 200)}`);
+
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await runCommand("curl", args, {
+        input: options.body,
+        timeoutMs: timeoutMs + 5_000,
+        errorLabel: `${serviceName} curl request`,
+      });
+      const markerIndex = result.stdout.lastIndexOf(statusMarker);
+      if (markerIndex < 0) {
+        throw new Error(`${serviceName} response missing HTTP status marker`);
+      }
+      const rawBody = result.stdout.slice(0, markerIndex).trim();
+      const status = Number(result.stdout.slice(markerIndex + statusMarker.length).trim());
+      let parsed = null;
+      if (rawBody) {
+        try {
+          parsed = JSON.parse(rawBody);
+        } catch {
+          const excerpt = rawBody.replace(/\s+/g, " ").slice(0, 240);
+          throw new Error(`${serviceName} HTTP ${status || "unknown"} returned non-JSON response: ${excerpt}`);
+        }
+      }
+
+      const errorMessage = parsed?.error_description
+        || parsed?.error?.message
+        || parsed?.message
+        || (typeof parsed?.error === "string" ? parsed.error : "");
+      if (status < 200 || status >= 300 || parsed?.error) {
+        const message = errorMessage || `unexpected response status ${status}`;
+        const transient = status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+        if (transient && attempt < maxAttempts) {
+          lastError = new Error(`${serviceName} HTTP ${status}: ${message}`);
+          await sleep(300 * attempt);
+          continue;
+        }
+        throw new Error(`${serviceName} HTTP ${status}: ${message}`);
+      }
+      return parsed;
+    } catch (error) {
+      lastError = error;
+      const message = error.message || "";
+      const transient = /timed out|Could not resolve host|Failed to connect|Connection refused|HTTP (408|409|425|429|5\d\d)/i.test(message);
+      if (!transient || attempt === maxAttempts) break;
+      await sleep(300 * attempt);
+    }
   }
-  if (parsed?.error) {
-    const message = parsed.error_description || parsed.error?.message || parsed.error;
-    throw new Error(`${serviceName} error: ${message}`);
-  }
-  return parsed;
+  throw lastError;
 }
 
 async function curlText(url, options = {}) {
