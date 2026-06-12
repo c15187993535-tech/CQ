@@ -31,6 +31,13 @@ WEB_MCP_PROXY = "http://127.0.0.1:7897"
 
 `GITHUB_PERSONAL_ACCESS_TOKEN` is read from the environment.
 
+GitHub auth is source-aware:
+
+- Primary: `GITHUB_PERSONAL_ACCESS_TOKEN`
+- Optional fallback: `gh auth token` when GitHub CLI is installed and logged in
+
+Use `github_auth_status` or `mcp_health_check` to see the active source. PAT renewal cannot be fully automated without a delegated OAuth/GitHub App flow; the fallback path avoids downtime when `gh` is available.
+
 Optional search upgrade:
 
 ```bash
@@ -89,6 +96,8 @@ This creates:
 - `google_drive_search`
 - `google_docs_get`
 - `google_sheets_values`
+
+Google access tokens refresh automatically when `google_token.json` contains a valid `refresh_token`. If the refresh token is revoked, rerun `npm run google:auth-url` and `npm run google:token`.
 
 ## Web tools
 

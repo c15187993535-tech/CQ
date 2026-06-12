@@ -14,6 +14,7 @@ const googleTokenPath = path.resolve(process.env.GOOGLE_OAUTH_TOKEN || path.join
 const googleProxy = process.env.GOOGLE_MCP_PROXY || "";
 const webProxy = process.env.WEB_MCP_PROXY || process.env.GOOGLE_MCP_PROXY || "";
 const braveSearchApiKey = process.env.BRAVE_SEARCH_API_KEY || "";
+let githubCliTokenCache = null;
 
 function text(content) {
   return { content: [{ type: "text", text: String(content ?? "") }] };
@@ -102,31 +103,76 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function githubRequest(endpoint, options = {}) {
-  const token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
-  if (!token) throw new Error("GITHUB_PERSONAL_ACCESS_TOKEN is not set");
-  const url = endpoint.startsWith("http") ? endpoint : `https://api.github.com${endpoint}`;
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      "Accept": "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(options.headers || {}),
-    },
-  });
-  const body = await response.text();
-  let parsed;
+async function githubTokenCandidates() {
+  const candidates = [];
+  if (process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
+    candidates.push({
+      source: "GITHUB_PERSONAL_ACCESS_TOKEN",
+      token: process.env.GITHUB_PERSONAL_ACCESS_TOKEN,
+    });
+  }
+  if (githubCliTokenCache) {
+    candidates.push(githubCliTokenCache);
+    return candidates;
+  }
   try {
-    parsed = body ? JSON.parse(body) : null;
+    const result = await runCommand("gh", ["auth", "token"], {
+      timeoutMs: 10_000,
+      errorLabel: "GitHub CLI token lookup",
+    });
+    const token = result.stdout.trim();
+    if (token) {
+      githubCliTokenCache = { source: "gh auth token", token };
+      candidates.push(githubCliTokenCache);
+    }
   } catch {
-    parsed = body;
+    // GitHub CLI is optional; PAT remains the primary free path.
   }
-  if (!response.ok) {
+  return candidates;
+}
+
+function githubRecoveryHint() {
+  return "GitHub token recovery: regenerate a fine-grained PAT and update GITHUB_PERSONAL_ACCESS_TOKEN, or install/login GitHub CLI so personal_mcp can fall back to `gh auth token`.";
+}
+
+async function githubRequest(endpoint, options = {}) {
+  const candidates = await githubTokenCandidates();
+  if (!candidates.length) throw new Error(`No GitHub token source available. ${githubRecoveryHint()}`);
+  const url = endpoint.startsWith("http") ? endpoint : `https://api.github.com${endpoint}`;
+  const failures = [];
+  for (const candidate of candidates) {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        "Authorization": `Bearer ${candidate.token}`,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...(options.headers || {}),
+      },
+    });
+    const body = await response.text();
+    let parsed;
+    try {
+      parsed = body ? JSON.parse(body) : null;
+    } catch {
+      parsed = body;
+    }
+    if (response.ok) {
+      if (parsed && typeof parsed === "object") {
+        Object.defineProperty(parsed, "__tokenSource", {
+          value: candidate.source,
+          enumerable: false,
+        });
+      }
+      return parsed;
+    }
     const message = typeof parsed === "object" && parsed?.message ? parsed.message : body;
-    throw new Error(`GitHub API ${response.status}: ${message}`);
+    failures.push(`${candidate.source}: HTTP ${response.status}: ${message}`);
+    if (![401, 403].includes(response.status)) {
+      throw new Error(`GitHub API ${response.status}: ${message}`);
+    }
   }
-  return parsed;
+  throw new Error(`${failures.join("; ")}. ${githubRecoveryHint()}`);
 }
 
 function repoParts(repository) {
@@ -554,7 +600,36 @@ server.tool(
   {},
   async () => {
     const user = await githubRequest("/user");
-    return json({ login: user.login, id: user.id, name: user.name });
+    return json({ login: user.login, id: user.id, name: user.name, tokenSource: user.__tokenSource || "unknown" });
+  },
+);
+
+server.tool(
+  "github_auth_status",
+  "Show GitHub authentication sources and recovery guidance.",
+  {},
+  async () => {
+    const candidates = await githubTokenCandidates();
+    const sources = candidates.map((candidate) => candidate.source);
+    let user = null;
+    let error = null;
+    try {
+      const current = await githubRequest("/user");
+      user = {
+        login: current.login,
+        id: current.id,
+        tokenSource: current.__tokenSource || "unknown",
+      };
+    } catch (err) {
+      error = err.message;
+    }
+    return json({
+      ok: Boolean(user),
+      sources,
+      user,
+      error,
+      recoveryHint: githubRecoveryHint(),
+    });
   },
 );
 
@@ -816,7 +891,12 @@ server.tool(
     if (includeNetwork) {
       checks.push(await runHealthProbe("github", async () => {
         const user = await githubRequest("/user");
-        return { status: "ok", login: user.login };
+        return {
+          status: "ok",
+          login: user.login,
+          tokenSource: user.__tokenSource || "unknown",
+          fallbackAvailable: (await githubTokenCandidates()).some((candidate) => candidate.source === "gh auth token"),
+        };
       }));
 
       checks.push(await runHealthProbe("lark", async () => {
