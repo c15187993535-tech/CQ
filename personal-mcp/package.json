@@ -11,7 +11,7 @@
     "google:auth-url": "node ./scripts/google-auth.js url",
     "google:token": "node ./scripts/google-auth.js token",
     "google:import-credentials": "node ./scripts/google-import-credentials.js",
-    "check": "node --check ./src/index.js"
+    "check": "node --check ./src/index.js && node --check ./scripts/google-auth.js && node --check ./scripts/google-import-credentials.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.21.0",

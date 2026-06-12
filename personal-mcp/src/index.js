@@ -170,6 +170,7 @@ async function refreshGoogleToken(credentials, token) {
     grant_type: "refresh_token",
   });
   const body = await curlJson("https://oauth2.googleapis.com/token", {
+    serviceName: "Google OAuth",
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: params.toString(),
@@ -186,6 +187,7 @@ async function refreshGoogleToken(credentials, token) {
 async function curlJson(url, options = {}) {
   const args = ["-sS"];
   const proxy = options.proxy ?? googleProxy;
+  const serviceName = options.serviceName || "HTTP API";
   if (proxy) args.push("-x", proxy);
   if (options.method) args.push("-X", options.method);
   for (const [name, value] of Object.entries(options.headers || {})) {
@@ -203,11 +205,11 @@ async function curlJson(url, options = {}) {
   try {
     parsed = JSON.parse(result.stdout);
   } catch {
-    throw new Error(`Google API returned non-JSON response: ${result.stdout.slice(0, 200)}`);
+    throw new Error(`${serviceName} returned non-JSON response: ${result.stdout.slice(0, 200)}`);
   }
   if (parsed?.error) {
     const message = parsed.error_description || parsed.error?.message || parsed.error;
-    throw new Error(`Google API error: ${message}`);
+    throw new Error(`${serviceName} error: ${message}`);
   }
   return parsed;
 }
@@ -317,6 +319,7 @@ async function braveSearch(query, options = {}) {
   if (country) params.set("country", country.toUpperCase());
   if (freshness) params.set("freshness", freshness);
   const data = await curlJson(`https://api.search.brave.com/res/v1/web/search?${params}`, {
+    serviceName: "Brave Search API",
     proxy: webProxy,
     headers: {
       Accept: "application/json",
@@ -408,6 +411,7 @@ async function googleAccessToken() {
 async function googleRequest(url, options = {}) {
   const accessToken = await googleAccessToken();
   return await curlJson(url, {
+    serviceName: "Google API",
     method: options.method,
     body: options.body,
     headers: {
