@@ -1,2 +1,4 @@
 node_modules/
-
+data/sqlite/*.db
+data/sqlite/*.sqlite
+data/sqlite/*.sqlite3

@@ -7,6 +7,7 @@ This MCP server wraps the personal integrations that have already been verified 
 - Feishu/Lark via `lark-cli`
 - Google Drive/Docs/Sheets via local OAuth files
 - Web search/fetch via optional Brave Search or free Bing RSS fallback
+- SQLite readonly database inspection/query tools
 - One-shot health checks across the configured integrations
 
 ## Run
@@ -27,6 +28,7 @@ startup_timeout_sec = 60
 [mcp_servers.personal_mcp.env]
 OBSIDIAN_VAULT_PATH = "/Users/mac/Desktop/知识库"
 WEB_MCP_PROXY = "http://127.0.0.1:7897"
+SQLITE_DB_ROOTS = "/Users/mac/Documents/MCP 建设/personal-mcp/data/sqlite"
 ```
 
 `GITHUB_PERSONAL_ACCESS_TOKEN` is read from the environment.
@@ -114,8 +116,33 @@ export WEB_MCP_PROXY=http://127.0.0.1:7897
 
 The free Bing RSS fallback is good enough for lightweight discovery. For higher search quality and lower drift, configure Brave Search; if Brave fails, `backend: "auto"` falls back to Bing RSS.
 
+## SQLite readonly tools
+
+SQLite support is local, free, and readonly. By default, database files are only allowed under:
+
+```text
+/Users/mac/Documents/MCP 建设/personal-mcp/data/sqlite
+```
+
+You can add more allowed roots with `SQLITE_DB_ROOTS` using colon-separated paths.
+
+Tools:
+
+- `sqlite_list_databases`: list allowed `.db`, `.sqlite`, and `.sqlite3` files.
+- `sqlite_list_tables`: list tables and views.
+- `sqlite_describe_table`: inspect columns and indexes.
+- `sqlite_query_readonly`: run one `SELECT` or `WITH` query.
+
+Safety limits:
+
+- Opens databases with `sqlite3 -readonly`.
+- Allows only one `SELECT` or `WITH` statement.
+- Blocks write/admin keywords like `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `PRAGMA`, `ATTACH`, and `VACUUM`.
+- Adds a default `LIMIT` when the query has no limit.
+- Keeps a short execution timeout.
+
 ## Health check
 
-- `mcp_health_check`: verifies Obsidian, Google OAuth files, search config, and optionally GitHub, Lark, Google Drive, and web search.
+- `mcp_health_check`: verifies Obsidian, Google OAuth files, search config, SQLite roots, and optionally GitHub, Lark, Google Drive, and web search.
 
 Use `includeNetwork: false` for a fast local-only check, or `includeNetwork: true` for end-to-end validation.

@@ -2,10 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(moduleDir, "..");
 const vaultRoot = path.resolve(process.env.OBSIDIAN_VAULT_PATH || "/Users/mac/Desktop/知识库");
 const defaultGithubOwner = process.env.GITHUB_OWNER || "c15187993535-tech";
 const googleConfigDir = path.resolve(process.env.GOOGLE_MCP_CONFIG_DIR || path.join(process.env.HOME || ".", ".config", "personal-mcp"));
@@ -14,6 +17,10 @@ const googleTokenPath = path.resolve(process.env.GOOGLE_OAUTH_TOKEN || path.join
 const googleProxy = process.env.GOOGLE_MCP_PROXY || "";
 const webProxy = process.env.WEB_MCP_PROXY || process.env.GOOGLE_MCP_PROXY || "";
 const braveSearchApiKey = process.env.BRAVE_SEARCH_API_KEY || "";
+const sqliteRoots = (process.env.SQLITE_DB_ROOTS || path.join(projectRoot, "data", "sqlite"))
+  .split(":")
+  .filter(Boolean)
+  .map((root) => path.resolve(root));
 let githubCliTokenCache = null;
 
 function text(content) {
@@ -33,6 +40,48 @@ function ensureInsideVault(inputPath) {
   return absolute;
 }
 
+function ensureInsideRoots(inputPath, roots, label) {
+  const absolute = path.resolve(inputPath);
+  for (const root of roots) {
+    const relative = path.relative(root, absolute);
+    if (!relative.startsWith("..") && !path.isAbsolute(relative)) return absolute;
+  }
+  throw new Error(`${label} path is outside allowed roots: ${inputPath}`);
+}
+
+function ensureSqlitePath(dbPath) {
+  const absolute = ensureInsideRoots(dbPath, sqliteRoots, "SQLite database");
+  if (!/\.(db|sqlite|sqlite3)$/i.test(absolute)) {
+    throw new Error("SQLite database path must end with .db, .sqlite, or .sqlite3");
+  }
+  return absolute;
+}
+
+function assertReadonlySql(sql) {
+  const normalized = String(sql || "")
+    .replace(/--.*$/gm, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .trim();
+  if (!normalized) throw new Error("SQL is empty.");
+  if (!/^(select|with)\b/i.test(normalized)) {
+    throw new Error("Only SELECT or WITH queries are allowed.");
+  }
+  if (normalized.includes(";")) {
+    const statements = normalized.split(";").map((part) => part.trim()).filter(Boolean);
+    if (statements.length > 1) throw new Error("Only one readonly SQL statement is allowed.");
+  }
+  const blocked = /\b(insert|update|delete|drop|alter|create|replace|truncate|attach|detach|pragma|vacuum|reindex|analyze)\b/i;
+  if (blocked.test(normalized)) {
+    throw new Error("SQL contains a blocked write/admin keyword.");
+  }
+  return normalized.replace(/;+\s*$/, "");
+}
+
+function addLimit(sql, limit) {
+  if (/\blimit\s+\d+/i.test(sql)) return sql;
+  return `${sql} LIMIT ${limit}`;
+}
+
 async function walkMarkdown(dir, options = {}) {
   const { maxFiles = 2000, includeTrash = false } = options;
   const files = [];
@@ -47,6 +96,32 @@ async function walkMarkdown(dir, options = {}) {
       if (entry.isDirectory()) {
         await visit(full);
       } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+        files.push(full);
+      }
+    }
+  }
+  await visit(dir);
+  return files;
+}
+
+async function walkSqliteDatabases(dir, options = {}) {
+  const { maxFiles = 200 } = options;
+  const files = [];
+  async function visit(current) {
+    if (files.length >= maxFiles) return;
+    let entries;
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= maxFiles) break;
+      if (entry.name.startsWith(".")) continue;
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        await visit(full);
+      } else if (entry.isFile() && /\.(db|sqlite|sqlite3)$/i.test(entry.name)) {
         files.push(full);
       }
     }
@@ -330,6 +405,22 @@ async function curlText(url, options = {}) {
     timeoutMs: options.timeoutMs || 45_000,
   });
   return result.stdout;
+}
+
+async function sqliteJson(dbPath, sql, options = {}) {
+  const database = ensureSqlitePath(dbPath);
+  await fs.access(database);
+  const result = await runCommand("sqlite3", [
+    "-readonly",
+    "-json",
+    database,
+    sql,
+  ], {
+    timeoutMs: options.timeoutMs || 15_000,
+    errorLabel: "sqlite3 readonly query",
+  });
+  const output = result.stdout.trim();
+  return output ? JSON.parse(output) : [];
 }
 
 function decodeHtmlEntities(value) {
@@ -808,6 +899,74 @@ server.tool(
 );
 
 server.tool(
+  "sqlite_list_databases",
+  "List SQLite database files under allowed roots.",
+  {
+    limit: z.number().int().min(1).max(200).default(50),
+  },
+  async ({ limit }) => {
+    const files = [];
+    for (const root of sqliteRoots) {
+      const databases = await walkSqliteDatabases(root, { maxFiles: limit });
+      for (const file of databases) {
+        if (files.length >= limit) break;
+        const stat = await fs.stat(file);
+        files.push({
+          path: file,
+          root,
+          sizeBytes: stat.size,
+          modifiedAt: stat.mtime.toISOString(),
+        });
+      }
+      if (files.length >= limit) break;
+    }
+    return json({ allowedRoots: sqliteRoots, databases: files });
+  },
+);
+
+server.tool(
+  "sqlite_list_tables",
+  "List tables and views in a readonly SQLite database.",
+  {
+    dbPath: z.string().describe("Path to an allowed .db/.sqlite/.sqlite3 file."),
+  },
+  async ({ dbPath }) => {
+    const rows = await sqliteJson(dbPath, "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name");
+    return json(rows);
+  },
+);
+
+server.tool(
+  "sqlite_describe_table",
+  "Describe columns and indexes for a SQLite table.",
+  {
+    dbPath: z.string().describe("Path to an allowed .db/.sqlite/.sqlite3 file."),
+    table: z.string().min(1),
+  },
+  async ({ dbPath, table }) => {
+    const safeTable = table.replaceAll("'", "''");
+    const columns = await sqliteJson(dbPath, `SELECT cid, name, type, "notnull" AS not_null, dflt_value AS default_value, pk FROM pragma_table_info('${safeTable}')`);
+    const indexes = await sqliteJson(dbPath, `SELECT name, "unique" AS is_unique, origin, partial FROM pragma_index_list('${safeTable}')`);
+    return json({ table, columns, indexes });
+  },
+);
+
+server.tool(
+  "sqlite_query_readonly",
+  "Run a single readonly SELECT/WITH query against an allowed SQLite database.",
+  {
+    dbPath: z.string().describe("Path to an allowed .db/.sqlite/.sqlite3 file."),
+    sql: z.string().min(1).describe("Readonly SQL. Only SELECT or WITH is allowed."),
+    limit: z.number().int().min(1).max(500).default(100),
+  },
+  async ({ dbPath, sql, limit }) => {
+    const readonlySql = addLimit(assertReadonlySql(sql), limit);
+    const rows = await sqliteJson(dbPath, readonlySql, { timeoutMs: 15_000 });
+    return json({ sql: readonlySql, rowCount: rows.length, rows });
+  },
+);
+
+server.tool(
   "web_search",
   "Search the web. Uses Brave Search when BRAVE_SEARCH_API_KEY is set, otherwise falls back to free Bing RSS.",
   {
@@ -887,6 +1046,24 @@ server.tool(
       fallback: "bing-rss",
       proxy: webProxy || null,
     })));
+
+    checks.push(await runHealthProbe("sqlite_config", async () => {
+      const roots = [];
+      let databaseCount = 0;
+      for (const root of sqliteRoots) {
+        let exists = false;
+        try {
+          const stat = await fs.stat(root);
+          exists = stat.isDirectory();
+        } catch {}
+        if (exists) {
+          const databases = await walkSqliteDatabases(root, { maxFiles: 20 });
+          databaseCount += databases.length;
+        }
+        roots.push({ root, exists });
+      }
+      return { status: "ok", roots, databaseCount };
+    }));
 
     if (includeNetwork) {
       checks.push(await runHealthProbe("github", async () => {

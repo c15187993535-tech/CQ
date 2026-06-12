@@ -14,6 +14,7 @@
 | 飞书 / Lark | 已跑通 | 通过 `lark-cli` 查询认证、日程、云文档、任务 |
 | Google Drive / Docs / Sheets | 已跑通 | 使用本地 OAuth 文件查询账号、搜索 Drive、读取 Docs / Sheets |
 | 网页搜索 / 网页读取 | 已跑通 | `web_search` 免费走 Bing RSS；可选 Brave Search；`web_fetch` 抓取网页正文 |
+| SQLite 只读数据库 | 已跑通 | 仅允许访问白名单目录内的 `.db` / `.sqlite` / `.sqlite3`，只支持 `SELECT` / `WITH` 查询 |
 | 健康检查 | 已跑通 | `mcp_health_check` 一键检查整套集成 |
 
 最新全链路健康检查结果：`ok`。
@@ -77,6 +78,7 @@ startup_timeout_sec = 60
 WEB_MCP_PROXY = "http://127.0.0.1:7897"
 GOOGLE_MCP_PROXY = "http://127.0.0.1:7897"
 OBSIDIAN_VAULT_PATH = "/Users/mac/Desktop/知识库"
+SQLITE_DB_ROOTS = "/Users/mac/Documents/MCP 建设/personal-mcp/data/sqlite"
 ```
 
 说明：
@@ -85,6 +87,7 @@ OBSIDIAN_VAULT_PATH = "/Users/mac/Desktop/知识库"
 - `GITHUB_PERSONAL_ACCESS_TOKEN` 从 shell 环境读取，已写入本机 zsh 配置。
 - GitHub CLI 已安装并登录，可作为 GitHub token 备用来源。
 - `BRAVE_SEARCH_API_KEY` 是可选项，不配置时 `web_search` 自动回退到免费 Bing RSS。
+- `SQLITE_DB_ROOTS` 是数据库白名单目录，多个目录用英文冒号 `:` 分隔。
 
 ## 4. 认证与本地文件
 
@@ -176,9 +179,30 @@ lark-cli
 06-日常/2026-06-12.md
 ```
 
+### SQLite
+
+数据库白名单目录：
+
+```text
+/Users/mac/Documents/MCP 建设/personal-mcp/data/sqlite
+```
+
+已验证样例库：
+
+```text
+/Users/mac/Documents/MCP 建设/personal-mcp/data/sqlite/personal_demo.sqlite
+```
+
+注意：
+
+- SQLite 本身是本地文件数据库，不需要单独启动服务，也不需要付费。
+- 当前 MCP 使用系统自带 `/usr/bin/sqlite3`，以 `-readonly` 打开数据库。
+- 仓库已忽略 `data/sqlite/*.db`、`*.sqlite`、`*.sqlite3`，避免把个人数据库提交到 GitHub。
+- 真正使用时，把需要分析的 SQLite 文件放到白名单目录，或把其所在目录加入 `SQLITE_DB_ROOTS`。
+
 ## 5. MCP 工具清单
 
-当前 `personal_mcp` 一共注册 23 个工具：
+当前 `personal_mcp` 一共注册 27 个工具：
 
 ```text
 obsidian_list_notes
@@ -204,6 +228,10 @@ google_profile
 google_drive_search
 google_docs_get
 google_sheets_values
+sqlite_list_databases
+sqlite_list_tables
+sqlite_describe_table
+sqlite_query_readonly
 ```
 
 ## 6. 验证命令
@@ -244,6 +272,7 @@ mcp_health_check({ "includeNetwork": true })
 - Obsidian 路径与样例笔记
 - Google OAuth 文件
 - 搜索配置
+- SQLite 白名单目录与数据库数量
 - GitHub API
 - GitHub token 来源与 fallback 状态
 - 飞书认证
@@ -314,6 +343,35 @@ fallbackAvailable = true
 
 如果未来配置 `BRAVE_SEARCH_API_KEY`，`backend: "auto"` 会优先 Brave Search，失败后回退 Bing RSS。
 
+## 6.2 SQLite 只读数据库验证
+
+已完成的 MCP 实测：
+
+```text
+sqlite_list_databases -> 找到 personal_demo.sqlite
+sqlite_list_tables -> 找到 expenses 表
+sqlite_describe_table -> 正确返回 id/date/category/amount/note 字段
+sqlite_query_readonly -> 聚合查询成功，自动补 LIMIT
+sqlite_query_readonly(DELETE FROM expenses) -> 被拦截，只允许 SELECT 或 WITH
+mcp_health_check(includeNetwork=false) -> sqlite_config=ok, databaseCount=1
+```
+
+示例查询：
+
+```sql
+SELECT category, SUM(amount) AS total
+FROM expenses
+GROUP BY category
+ORDER BY total DESC
+```
+
+返回摘要：
+
+```text
+software = 38.7
+learning = 12.5
+```
+
 ## 7. HTTP JSON 稳定性优化
 
 今天最后修复了 `curlJson` 的稳定性问题。
@@ -367,7 +425,8 @@ fallbackAvailable = true
       "env": {
         "OBSIDIAN_VAULT_PATH": "/Users/mac/Desktop/知识库",
         "GOOGLE_MCP_PROXY": "http://127.0.0.1:7897",
-        "WEB_MCP_PROXY": "http://127.0.0.1:7897"
+        "WEB_MCP_PROXY": "http://127.0.0.1:7897",
+        "SQLITE_DB_ROOTS": "/Users/mac/Documents/MCP 建设/personal-mcp/data/sqlite"
       }
     }
   }
@@ -405,7 +464,7 @@ mcp_health_check({ "includeNetwork": true })
 - 不要把 `GITHUB_PERSONAL_ACCESS_TOKEN`、Google OAuth secret、refresh token 写入文档或仓库。
 - `~/.config/personal-mcp/google_token.json` 应保持本机私有。
 - GitHub token 权限建议只授予必要仓库。
-- 数据库 MCP 如果后续接入，建议先做只读账号，只允许 `SELECT`。
+- 数据库 MCP 已按只读模式接入；后续如果接入 MySQL/PostgreSQL，应继续使用只读账号，只允许 `SELECT`。
 - 微信 MCP 不建议直接自动发消息，优先做导出记录读取和总结。
 
 ## 11.1 Claude / Codex 配置安全优化
@@ -443,7 +502,8 @@ mcp_health_check({ "includeNetwork": true })
       "env": {
         "OBSIDIAN_VAULT_PATH": "/Users/mac/Desktop/知识库",
         "GOOGLE_MCP_PROXY": "http://127.0.0.1:7897",
-        "WEB_MCP_PROXY": "http://127.0.0.1:7897"
+        "WEB_MCP_PROXY": "http://127.0.0.1:7897",
+        "SQLITE_DB_ROOTS": "/Users/mac/Documents/MCP 建设/personal-mcp/data/sqlite"
       }
     }
   }
@@ -497,7 +557,7 @@ GitHub fallbackAvailable=true
 优先级建议：
 
 1. 配置 Brave Search API Key，提高搜索质量与稳定性。
-2. 增加只读数据库 MCP。
+2. 将常用真实 SQLite 数据库目录加入 `SQLITE_DB_ROOTS`，并保持只读访问。
 3. 扩展本地文件白名单，但默认只读。
 4. 为内部后台优先找 API，没有 API 再做浏览器自动化。
 5. 定期运行 `mcp_health_check`，把它作为跨客户端迁移和故障排查的第一步。
@@ -507,7 +567,8 @@ GitHub fallbackAvailable=true
 最后一次端到端验证通过：
 
 ```text
-TOOLS_COUNT=23
+TOOLS_COUNT=27
+SQLite tools=ok
 mcp_health_check=status ok
 github=ok
 lark=ok
