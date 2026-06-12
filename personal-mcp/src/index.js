@@ -13,6 +13,7 @@ const googleCredentialsPath = path.resolve(process.env.GOOGLE_OAUTH_CREDENTIALS 
 const googleTokenPath = path.resolve(process.env.GOOGLE_OAUTH_TOKEN || path.join(googleConfigDir, "google_token.json"));
 const googleProxy = process.env.GOOGLE_MCP_PROXY || "";
 const webProxy = process.env.WEB_MCP_PROXY || process.env.GOOGLE_MCP_PROXY || "";
+const braveSearchApiKey = process.env.BRAVE_SEARCH_API_KEY || "";
 
 function text(content) {
   return { content: [{ type: "text", text: String(content ?? "") }] };
@@ -184,7 +185,8 @@ async function refreshGoogleToken(credentials, token) {
 
 async function curlJson(url, options = {}) {
   const args = ["-sS"];
-  if (googleProxy) args.push("-x", googleProxy);
+  const proxy = options.proxy ?? googleProxy;
+  if (proxy) args.push("-x", proxy);
   if (options.method) args.push("-X", options.method);
   for (const [name, value] of Object.entries(options.headers || {})) {
     args.push("-H", `${name}: ${value}`);
@@ -286,6 +288,112 @@ function parseBingRss(xml, limit) {
     if (title && link) items.push({ title, url: link, snippet, publishedAt });
   }
   return items;
+}
+
+function mapBraveResults(data, limit) {
+  return (data.web?.results || []).slice(0, limit).map((item) => ({
+    title: item.title || "",
+    url: item.url || "",
+    snippet: stripHtml(item.description || ""),
+    publishedAt: item.age || item.page_age || "",
+  })).filter((item) => item.title && item.url);
+}
+
+async function braveSearch(query, options = {}) {
+  if (!braveSearchApiKey) {
+    throw new Error("BRAVE_SEARCH_API_KEY is not set");
+  }
+  const {
+    limit = 5,
+    market = "zh-CN",
+    freshness,
+  } = options;
+  const [language, country = ""] = market.split("-");
+  const params = new URLSearchParams({
+    q: query,
+    count: String(Math.min(limit, 20)),
+    search_lang: language || "zh",
+  });
+  if (country) params.set("country", country.toUpperCase());
+  if (freshness) params.set("freshness", freshness);
+  const data = await curlJson(`https://api.search.brave.com/res/v1/web/search?${params}`, {
+    proxy: webProxy,
+    headers: {
+      Accept: "application/json",
+      "X-Subscription-Token": braveSearchApiKey,
+    },
+  });
+  return mapBraveResults(data, limit);
+}
+
+async function bingRssSearch(query, options = {}) {
+  const {
+    limit = 5,
+    market = "zh-CN",
+  } = options;
+  const params = new URLSearchParams({
+    q: query,
+    format: "rss",
+    setlang: market,
+  });
+  const xml = await curlText(`https://www.bing.com/search?${params}`, {
+    userAgent: "Mozilla/5.0 (compatible; personal-mcp/0.1)",
+  });
+  return parseBingRss(xml, limit);
+}
+
+async function webSearch(query, options = {}) {
+  const requestedBackend = options.backend || "auto";
+  const attempts = [];
+  if ((requestedBackend === "auto" || requestedBackend === "brave") && braveSearchApiKey) {
+    try {
+      const results = await braveSearch(query, options);
+      return { backend: "brave", results, attempts };
+    } catch (error) {
+      attempts.push({ backend: "brave", ok: false, error: error.message });
+      if (requestedBackend === "brave") return { backend: "brave", results: [], attempts };
+    }
+  }
+  if (requestedBackend === "brave") {
+    return {
+      backend: "brave",
+      results: [],
+      attempts: [{ backend: "brave", ok: false, error: "BRAVE_SEARCH_API_KEY is not set" }],
+    };
+  }
+  try {
+    const results = await bingRssSearch(query, options);
+    return { backend: "bing-rss", results, attempts };
+  } catch (error) {
+    attempts.push({ backend: "bing-rss", ok: false, error: error.message });
+    return { backend: "bing-rss", results: [], attempts };
+  }
+}
+
+function healthResult(name, status, details = {}) {
+  return { name, status, ...details };
+}
+
+async function runHealthProbe(name, fn) {
+  const startedAt = Date.now();
+  try {
+    const details = await fn();
+    return healthResult(name, details.status || "ok", {
+      latencyMs: Date.now() - startedAt,
+      ...details,
+    });
+  } catch (error) {
+    return healthResult(name, "fail", {
+      latencyMs: Date.now() - startedAt,
+      error: error.message,
+    });
+  }
+}
+
+function summarizeHealth(checks) {
+  if (checks.some((check) => check.status === "fail")) return "fail";
+  if (checks.some((check) => check.status === "warn")) return "warn";
+  return "ok";
 }
 
 async function googleAccessToken() {
@@ -572,27 +680,22 @@ server.tool(
 
 server.tool(
   "web_search",
-  "Search the web using a free RSS search backend. Best for lightweight discovery; use web_fetch to read selected pages.",
+  "Search the web. Uses Brave Search when BRAVE_SEARCH_API_KEY is set, otherwise falls back to free Bing RSS.",
   {
     query: z.string().min(1),
     limit: z.number().int().min(1).max(20).default(5),
     market: z.string().default("zh-CN").describe("Search language/market hint, e.g. zh-CN or en-US."),
+    backend: z.enum(["auto", "brave", "bing-rss"]).default("auto"),
+    freshness: z.enum(["pd", "pw", "pm", "py"]).optional().describe("Brave freshness filter: past day/week/month/year."),
   },
-  async ({ query, limit, market }) => {
-    const params = new URLSearchParams({
-      q: query,
-      format: "rss",
-      setlang: market,
-    });
-    const xml = await curlText(`https://www.bing.com/search?${params}`, {
-      userAgent: "Mozilla/5.0 (compatible; personal-mcp/0.1)",
-    });
-    const results = parseBingRss(xml, limit);
+  async ({ query, limit, market, backend, freshness }) => {
+    const search = await webSearch(query, { limit, market, backend, freshness });
     return json({
       query,
-      backend: "bing-rss",
-      results,
-      note: results.length ? undefined : "No results returned by the free RSS backend.",
+      backend: search.backend,
+      results: search.results,
+      attempts: search.attempts,
+      note: search.results.length ? undefined : "No results returned by the configured search backends.",
     });
   },
 );
@@ -615,6 +718,90 @@ server.tool(
       chars: content.length,
       content: content.slice(0, maxChars),
       truncated: content.length > maxChars,
+    });
+  },
+);
+
+server.tool(
+  "mcp_health_check",
+  "Run a quick health check across personal MCP integrations.",
+  {
+    includeNetwork: z.boolean().default(true).describe("Include network-backed checks for GitHub, Lark, Google, and web search."),
+  },
+  async ({ includeNetwork }) => {
+    const checks = [];
+    checks.push(await runHealthProbe("obsidian", async () => {
+      await fs.access(vaultRoot);
+      const notes = await walkMarkdown(vaultRoot, { maxFiles: 3 });
+      return {
+        status: notes.length ? "ok" : "warn",
+        vaultRoot,
+        sampleNotes: notes.map((file) => path.relative(vaultRoot, file)),
+      };
+    }));
+
+    checks.push(await runHealthProbe("google_oauth_files", async () => {
+      const token = await loadGoogleToken();
+      await fs.access(googleCredentialsPath);
+      return {
+        status: token.refresh_token ? "ok" : "warn",
+        credentialsPath: googleCredentialsPath,
+        tokenPath: googleTokenPath,
+        hasRefreshToken: Boolean(token.refresh_token),
+        expiresAt: token.expires_at ? new Date(token.expires_at).toISOString() : null,
+      };
+    }));
+
+    checks.push(await runHealthProbe("search_config", async () => ({
+      status: "ok",
+      braveConfigured: Boolean(braveSearchApiKey),
+      fallback: "bing-rss",
+      proxy: webProxy || null,
+    })));
+
+    if (includeNetwork) {
+      checks.push(await runHealthProbe("github", async () => {
+        const user = await githubRequest("/user");
+        return { status: "ok", login: user.login };
+      }));
+
+      checks.push(await runHealthProbe("lark", async () => {
+        const result = await runCommand("lark-cli", ["auth", "status"], { timeoutMs: 20_000 });
+        const parsed = JSON.parse(result.stdout);
+        const userStatus = parsed.identities?.user?.status;
+        return {
+          status: ["ready", "needs_refresh"].includes(userStatus) ? "ok" : "warn",
+          userStatus,
+          userName: parsed.identities?.user?.userName,
+          botStatus: parsed.identities?.bot?.status,
+        };
+      }));
+
+      checks.push(await runHealthProbe("google_drive", async () => {
+        const profile = await googleRequest("https://www.googleapis.com/drive/v3/about?fields=user");
+        return {
+          status: "ok",
+          displayName: profile.user?.displayName,
+          emailAddress: profile.user?.emailAddress,
+        };
+      }));
+
+      checks.push(await runHealthProbe("web_search", async () => {
+        const search = await webSearch("\"Model Context Protocol\"", { limit: 3, market: "en-US", backend: "auto" });
+        return {
+          status: search.results.length ? "ok" : "warn",
+          backend: search.backend,
+          results: search.results.length,
+          braveConfigured: Boolean(braveSearchApiKey),
+          attempts: search.attempts,
+        };
+      }));
+    }
+
+    return json({
+      status: summarizeHealth(checks),
+      checkedAt: new Date().toISOString(),
+      checks,
     });
   },
 );

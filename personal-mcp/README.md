@@ -6,7 +6,8 @@ This MCP server wraps the personal integrations that have already been verified 
 - GitHub API via `GITHUB_PERSONAL_ACCESS_TOKEN`
 - Feishu/Lark via `lark-cli`
 - Google Drive/Docs/Sheets via local OAuth files
-- Web search/fetch via free RSS search and direct page fetching
+- Web search/fetch via optional Brave Search or free Bing RSS fallback
+- One-shot health checks across the configured integrations
 
 ## Run
 
@@ -29,6 +30,12 @@ WEB_MCP_PROXY = "http://127.0.0.1:7897"
 ```
 
 `GITHUB_PERSONAL_ACCESS_TOKEN` is read from the environment.
+
+Optional search upgrade:
+
+```bash
+export BRAVE_SEARCH_API_KEY=your_key_here
+```
 
 ## Google OAuth
 
@@ -85,9 +92,9 @@ This creates:
 
 ## Web tools
 
-The web tools are free and do not require an API key:
+The web tools work for free without an API key:
 
-- `web_search`: lightweight search using Bing RSS.
+- `web_search`: uses Brave Search when `BRAVE_SEARCH_API_KEY` is set, otherwise falls back to Bing RSS.
 - `web_fetch`: fetch a page and extract readable text from HTML.
 
 Set `WEB_MCP_PROXY` when direct access is blocked:
@@ -95,3 +102,11 @@ Set `WEB_MCP_PROXY` when direct access is blocked:
 ```bash
 export WEB_MCP_PROXY=http://127.0.0.1:7897
 ```
+
+The free Bing RSS fallback is good enough for lightweight discovery. For higher search quality and lower drift, configure Brave Search; if Brave fails, `backend: "auto"` falls back to Bing RSS.
+
+## Health check
+
+- `mcp_health_check`: verifies Obsidian, Google OAuth files, search config, and optionally GitHub, Lark, Google Drive, and web search.
+
+Use `includeNetwork: false` for a fast local-only check, or `includeNetwork: true` for end-to-end validation.
