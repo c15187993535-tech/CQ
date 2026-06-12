@@ -82,6 +82,126 @@ function addLimit(sql, limit) {
   return `${sql} LIMIT ${limit}`;
 }
 
+function nowLocalIso() {
+  const offsetMs = new Date().getTimezoneOffset() * 60_000;
+  return new Date(Date.now() - offsetMs).toISOString().replace("T", " ").slice(0, 19);
+}
+
+function larkInboxTemplate() {
+  return `# AI 指令收件箱
+
+说明：
+手机上把任务写到“待处理”下面。
+Mac 上让 AI 读取本文档并执行。
+AI 执行后，把状态改为“已完成”，并写入结果。
+
+## 待处理
+
+### 示例任务
+状态：待处理
+优先级：中
+任务：
+读取今天 Obsidian 日记，生成日报，写入 Obsidian，并同步到飞书。
+
+## 已完成
+`;
+}
+
+function parseLarkInboxTasks(markdown, options = {}) {
+  const {
+    status = "待处理",
+    limit = 20,
+  } = options;
+  const content = String(markdown || "").replace(/\r\n/g, "\n");
+  const headingRegex = /^###\s+(.+?)\s*$/gm;
+  const headings = [];
+  let match;
+  while ((match = headingRegex.exec(content))) {
+    headings.push({ title: match[1].trim(), start: match.index, bodyStart: headingRegex.lastIndex });
+  }
+  const sectionStarts = [...content.matchAll(/^#{1,3}\s+.+?\s*$/gm)].map((item) => item.index);
+  const tasks = [];
+  for (let index = 0; index < headings.length; index += 1) {
+    const current = headings[index];
+    const nextStart = sectionStarts.find((start) => start > current.start) ?? content.length;
+    const block = content.slice(current.start, nextStart).trim();
+    const body = content.slice(current.bodyStart, nextStart).trim();
+    const statusMatch = body.match(/^状态[:：]\s*(.+?)\s*$/m);
+    const priorityMatch = body.match(/^优先级[:：]\s*(.+?)\s*$/m);
+    const createdMatch = body.match(/^创建时间[:：]\s*(.+?)\s*$/m);
+    const completedMatch = body.match(/^完成时间[:：]\s*(.+?)\s*$/m);
+    const taskMatch = body.match(/^任务[:：]\s*([\s\S]*?)(?=^结果[:：]|^完成时间[:：]|^状态[:：]|^优先级[:：]|^创建时间[:：]|^###\s+|\s*$)/m);
+    const resultMatch = body.match(/^结果[:：]\s*([\s\S]*?)(?=^完成时间[:：]|^###\s+|\s*$)/m);
+    const taskStatus = statusMatch?.[1]?.trim() || "";
+    if (status && taskStatus !== status) continue;
+    tasks.push({
+      id: Buffer.from(current.title).toString("base64url").slice(0, 24),
+      title: current.title,
+      status: taskStatus,
+      priority: priorityMatch?.[1]?.trim() || "",
+      createdAt: createdMatch?.[1]?.trim() || "",
+      completedAt: completedMatch?.[1]?.trim() || "",
+      task: (taskMatch?.[1] || "").trim(),
+      result: (resultMatch?.[1] || "").trim(),
+      block,
+    });
+    if (tasks.length >= limit) break;
+  }
+  return tasks;
+}
+
+function appendLarkInboxTask(markdown, task) {
+  const content = String(markdown || "").trimEnd();
+  const title = task.title?.trim() || `手机任务 ${nowLocalIso()}`;
+  const priority = task.priority?.trim() || "中";
+  const body = task.task?.trim() || "";
+  const createdAt = task.createdAt?.trim() || nowLocalIso();
+  const block = `### ${title}
+状态：待处理
+优先级：${priority}
+创建时间：${createdAt}
+任务：
+${body}
+`;
+  if (content.includes("## 待处理")) {
+    return content.replace(/(## 待处理\s*)/, `$1\n${block}\n`).trimEnd() + "\n";
+  }
+  return `${content || larkInboxTemplate().trimEnd()}
+
+## 待处理
+
+${block}
+`.trimEnd() + "\n";
+}
+
+function updateLarkInboxTask(markdown, title, result, options = {}) {
+  const content = String(markdown || "").replace(/\r\n/g, "\n");
+  const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(^###\\s+${escapedTitle}\\s*$)([\\s\\S]*?)(?=^#{1,3}\\s+|\\s*$)`, "m");
+  const match = content.match(pattern);
+  if (!match) throw new Error(`Task not found in inbox: ${title}`);
+  let body = match[2].trimEnd();
+  if (/^状态[:：]/m.test(body)) {
+    body = body.replace(/^状态[:：].*$/m, `状态：${options.status || "已完成"}`);
+  } else {
+    body = `状态：${options.status || "已完成"}\n${body}`;
+  }
+  body = body
+    .replace(/\n结果[:：][\s\S]*?(?=\n完成时间[:：]|\s*$)/m, "")
+    .replace(/\n完成时间[:：].*$/m, "")
+    .trimEnd();
+  const completedAt = options.completedAt || nowLocalIso();
+  const updated = `${match[1]}
+${body}
+
+结果：
+${String(result || "").trim()}
+
+完成时间：${completedAt}
+`;
+  return content.replace(pattern, updated).trimEnd() + "\n";
+}
+
 async function walkMarkdown(dir, options = {}) {
   const { maxFiles = 2000, includeTrash = false } = options;
   const files = [];
@@ -895,6 +1015,127 @@ server.tool(
       "user",
     ], { timeoutMs: 30_000 });
     return text(result.stdout);
+  },
+);
+
+server.tool(
+  "lark_inbox_template",
+  "Return a Markdown template for the Feishu AI instruction inbox.",
+  {},
+  async () => text(larkInboxTemplate()),
+);
+
+server.tool(
+  "lark_inbox_parse_text",
+  "Parse AI instruction inbox Markdown and return tasks.",
+  {
+    markdown: z.string(),
+    status: z.string().default("待处理").describe("Task status to filter. Use empty string to return all statuses."),
+    limit: z.number().int().min(1).max(100).default(20),
+  },
+  async ({ markdown, status, limit }) => json(parseLarkInboxTasks(markdown, { status, limit })),
+);
+
+async function larkFetchMarkdown(doc) {
+  const result = await runCommand("lark-cli", [
+    "docs",
+    "+fetch",
+    "--api-version",
+    "v2",
+    "--doc",
+    doc,
+    "--doc-format",
+    "markdown",
+    "--detail",
+    "simple",
+  ], { timeoutMs: 30_000 });
+  const parsed = JSON.parse(result.stdout);
+  return parsed.data?.document?.content || result.stdout;
+}
+
+async function larkOverwriteMarkdown(doc, markdown) {
+  const result = await runCommand("lark-cli", [
+    "docs",
+    "+update",
+    "--api-version",
+    "v2",
+    "--doc",
+    doc,
+    "--command",
+    "overwrite",
+    "--doc-format",
+    "markdown",
+    "--content",
+    "-",
+  ], {
+    input: markdown,
+    timeoutMs: 45_000,
+  });
+  return JSON.parse(result.stdout);
+}
+
+server.tool(
+  "lark_inbox_fetch_pending",
+  "Fetch a Feishu AI instruction inbox document and return pending tasks.",
+  {
+    doc: z.string().describe("Feishu document URL or token for the AI instruction inbox."),
+    status: z.string().default("待处理"),
+    limit: z.number().int().min(1).max(100).default(20),
+  },
+  async ({ doc, status, limit }) => {
+    const markdown = await larkFetchMarkdown(doc);
+    return json({
+      doc,
+      status,
+      tasks: parseLarkInboxTasks(markdown, { status, limit }),
+    });
+  },
+);
+
+server.tool(
+  "lark_inbox_add_task",
+  "Append a task to a Feishu AI instruction inbox document.",
+  {
+    doc: z.string().describe("Feishu document URL or token for the AI instruction inbox."),
+    title: z.string().min(1),
+    task: z.string().min(1),
+    priority: z.string().default("中"),
+  },
+  async ({ doc, title, task, priority }) => {
+    const markdown = await larkFetchMarkdown(doc);
+    const updated = appendLarkInboxTask(markdown, { title, task, priority });
+    const response = await larkOverwriteMarkdown(doc, updated);
+    return json({
+      ok: Boolean(response.ok),
+      doc,
+      title,
+      revisionId: response.data?.document?.revision_id,
+      url: response.data?.document?.url,
+    });
+  },
+);
+
+server.tool(
+  "lark_inbox_complete_task",
+  "Write a task result to a Feishu AI instruction inbox document and mark it completed.",
+  {
+    doc: z.string().describe("Feishu document URL or token for the AI instruction inbox."),
+    title: z.string().min(1).describe("Exact task heading text after ###."),
+    result: z.string().min(1),
+    status: z.string().default("已完成"),
+  },
+  async ({ doc, title, result, status }) => {
+    const markdown = await larkFetchMarkdown(doc);
+    const updated = updateLarkInboxTask(markdown, title, result, { status });
+    const response = await larkOverwriteMarkdown(doc, updated);
+    return json({
+      ok: Boolean(response.ok),
+      doc,
+      title,
+      status,
+      revisionId: response.data?.document?.revision_id,
+      url: response.data?.document?.url,
+    });
   },
 );
 

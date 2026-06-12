@@ -5,6 +5,7 @@ This MCP server wraps the personal integrations that have already been verified 
 - Obsidian vault files at `/Users/mac/Desktop/知识库`
 - GitHub API via `GITHUB_PERSONAL_ACCESS_TOKEN`
 - Feishu/Lark via `lark-cli`
+- Feishu AI instruction inbox workflow for mobile task capture
 - Google Drive/Docs/Sheets via local OAuth files
 - Web search/fetch via optional Brave Search or free Bing RSS fallback
 - SQLite readonly database inspection/query tools
@@ -109,6 +110,34 @@ This creates:
 - `google_sheets_values`
 
 Google access tokens refresh automatically when `google_token.json` contains a valid `refresh_token`. If the refresh token is revoked, rerun `npm run google:auth-url` and `npm run google:token`.
+
+## Feishu AI instruction inbox
+
+Created inbox document:
+
+```text
+https://my.feishu.cn/docx/EkRedV11koOJbrxooz9cACasnPe
+```
+
+Template file:
+
+```text
+docs/lark-ai-inbox-template.md
+```
+
+Tools:
+
+- `lark_inbox_template`: return the Markdown inbox template.
+- `lark_inbox_parse_text`: parse inbox Markdown locally, useful for tests and dry runs.
+- `lark_inbox_fetch_pending`: read a Feishu inbox doc and return tasks whose status is `待处理`.
+- `lark_inbox_add_task`: append a task to the inbox doc.
+- `lark_inbox_complete_task`: write a result and mark the task `已完成`.
+
+Mobile workflow:
+
+```text
+手机飞书写任务 -> Mac 上 AI 读取待处理 -> AI 调用 personal_mcp 执行 -> 结果写回飞书
+```
 
 ## Web tools
 

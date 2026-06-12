@@ -128,10 +128,58 @@ async function main() {
       "sqlite_query_readonly",
       "google_auth_status",
       "web_fetch",
+      "lark_inbox_template",
+      "lark_inbox_parse_text",
+      "lark_inbox_fetch_pending",
+      "lark_inbox_add_task",
+      "lark_inbox_complete_task",
     ]) {
       assert.ok(toolNames.includes(expected), `missing MCP tool: ${expected}`);
     }
-    assert.equal(toolNames.length, 27, "unexpected registered MCP tool count");
+    assert.equal(toolNames.length, 32, "unexpected registered MCP tool count");
+
+    const inboxTemplate = textResult(await client.callTool({ name: "lark_inbox_template", arguments: {} }));
+    assert.match(inboxTemplate, /# AI 指令收件箱/);
+    assert.match(inboxTemplate, /状态：待处理/);
+
+    const inboxMarkdown = `# AI 指令收件箱
+
+## 待处理
+
+### 整理今天日报
+状态：待处理
+优先级：高
+创建时间：2026-06-12 20:00:00
+任务：
+读取 Obsidian 今日笔记，生成日报。
+
+### 已完成示例
+状态：已完成
+优先级：低
+任务：
+这条不应该进入待处理。
+
+结果：
+已处理。
+
+完成时间：2026-06-12 20:10:00
+
+## 已完成
+`;
+    const pendingTasks = parseJsonResult(await client.callTool({
+      name: "lark_inbox_parse_text",
+      arguments: { markdown: inboxMarkdown, status: "待处理", limit: 10 },
+    }));
+    assert.equal(pendingTasks.length, 1);
+    assert.equal(pendingTasks[0].title, "整理今天日报");
+    assert.equal(pendingTasks[0].priority, "高");
+    assert.match(pendingTasks[0].task, /读取 Obsidian/);
+
+    const allInboxTasks = parseJsonResult(await client.callTool({
+      name: "lark_inbox_parse_text",
+      arguments: { markdown: inboxMarkdown, status: "", limit: 10 },
+    }));
+    assert.equal(allInboxTasks.length, 2);
 
     const notes = parseJsonResult(await client.callTool({
       name: "obsidian_list_notes",

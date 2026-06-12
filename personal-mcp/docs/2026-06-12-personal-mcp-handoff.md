@@ -12,6 +12,7 @@
 | Obsidian | 已跑通 | 读取、搜索、写入 `/Users/mac/Desktop/知识库` 下的 Markdown 笔记 |
 | GitHub | 已跑通 | 使用 `GITHUB_PERSONAL_ACCESS_TOKEN` 查询账号、仓库、Issue、PR，并可创建 PR；PAT 失效时可自动回退 `gh auth token` |
 | 飞书 / Lark | 已跑通 | 通过 `lark-cli` 查询认证、日程、云文档、任务 |
+| 飞书 AI 指令收件箱 | 已跑通 | 手机飞书写任务，Mac 上 AI 读取待处理任务并把结果写回 |
 | Google Drive / Docs / Sheets | 已跑通 | 使用本地 OAuth 文件查询账号、搜索 Drive、读取 Docs / Sheets |
 | 网页搜索 / 网页读取 | 已跑通 | `web_search` 免费走 Bing RSS；可选 Brave Search；`web_fetch` 抓取网页正文 |
 | SQLite 只读数据库 | 已跑通 | 仅允许访问白名单目录内的 `.db` / `.sqlite` / `.sqlite3`，只支持 `SELECT` / `WITH` 查询 |
@@ -165,6 +166,39 @@ lark-cli
 
 健康检查中 `lark` 状态为 `ok`，user / bot 均 ready。
 
+### 飞书 AI 指令收件箱
+
+手机入口文档：
+
+```text
+https://my.feishu.cn/docx/EkRedV11koOJbrxooz9cACasnPe
+```
+
+模板文件：
+
+```text
+/Users/mac/Documents/MCP 建设/personal-mcp/docs/lark-ai-inbox-template.md
+```
+
+已验证：
+
+```text
+lark_inbox_fetch_pending -> 成功读取“示例任务”
+lark_inbox_add_task -> 成功追加“MCP 写回验证”
+lark_inbox_complete_task -> 成功写入结果并标记已完成
+tools_count=32
+```
+
+手机使用方式：
+
+```text
+打开飞书 AI 指令收件箱
+在“## 待处理”下面新增一个 “### 任务标题”
+填写 状态：待处理 / 优先级 / 任务
+回到 Mac 后让 AI 执行 lark_inbox_fetch_pending
+AI 执行任务后用 lark_inbox_complete_task 写回结果并标记已完成
+```
+
 ### Obsidian
 
 知识库路径：
@@ -202,7 +236,7 @@ lark-cli
 
 ## 5. MCP 工具清单
 
-当前 `personal_mcp` 一共注册 27 个工具：
+当前 `personal_mcp` 一共注册 32 个工具：
 
 ```text
 obsidian_list_notes
@@ -220,6 +254,11 @@ lark_calendar_agenda
 lark_drive_search
 lark_doc_fetch
 lark_my_tasks
+lark_inbox_template
+lark_inbox_parse_text
+lark_inbox_fetch_pending
+lark_inbox_add_task
+lark_inbox_complete_task
 web_search
 web_fetch
 mcp_health_check
@@ -271,7 +310,8 @@ npm audit --omit=dev --audit-level=moderate
 覆盖内容：
 
 ```text
-MCP 工具注册数量 = 27
+MCP 工具注册数量 = 32
+飞书 AI 指令收件箱模板/解析工具
 Obsidian 读/写/路径越权拦截
 SQLite 列库/列表/字段结构/聚合查询
 SQLite DELETE、多语句、越权路径拦截
@@ -399,6 +439,36 @@ ORDER BY total DESC
 ```text
 software = 38.7
 learning = 12.5
+```
+
+## 6.3 飞书 AI 指令收件箱验证
+
+创建的飞书文档：
+
+```text
+AI 指令收件箱
+https://my.feishu.cn/docx/EkRedV11koOJbrxooz9cACasnPe
+```
+
+新增 MCP 工具：
+
+```text
+lark_inbox_template
+lark_inbox_parse_text
+lark_inbox_fetch_pending
+lark_inbox_add_task
+lark_inbox_complete_task
+```
+
+验证结果：
+
+```text
+tools_count=32
+lark_inbox_fetch_pending -> 读取到示例任务
+lark_inbox_add_task -> revision_id=5
+lark_inbox_complete_task -> revision_id=7
+任务状态=待处理
+任务优先级=中
 ```
 
 ## 7. HTTP JSON 稳定性优化
@@ -586,18 +656,21 @@ GitHub fallbackAvailable=true
 优先级建议：
 
 1. 配置 Brave Search API Key，提高搜索质量与稳定性。
-2. 将常用真实 SQLite 数据库目录加入 `SQLITE_DB_ROOTS`，并保持只读访问。
-3. 扩展本地文件白名单，但默认只读。
-4. 为内部后台优先找 API，没有 API 再做浏览器自动化。
-5. 定期运行 `mcp_health_check`，把它作为跨客户端迁移和故障排查的第一步。
+2. 手机端优先使用飞书 AI 指令收件箱下发任务。
+3. 将常用真实 SQLite 数据库目录加入 `SQLITE_DB_ROOTS`，并保持只读访问。
+4. 扩展本地文件白名单，但默认只读。
+5. 为内部后台优先找 API，没有 API 再做浏览器自动化。
+6. 定期运行 `mcp_health_check`，把它作为跨客户端迁移和故障排查的第一步。
 
 ## 13. 今日验收摘要
 
 最后一次端到端验证通过：
 
 ```text
-TOOLS_COUNT=27
+TOOLS_COUNT=32
 SQLite tools=ok
+Lark inbox tools=ok
+Lark inbox writeback=ok
 npm test=passed
 npm audit=0 vulnerabilities
 mcp_health_check=status ok
