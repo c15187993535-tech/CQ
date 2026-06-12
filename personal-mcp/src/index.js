@@ -12,6 +12,7 @@ const googleConfigDir = path.resolve(process.env.GOOGLE_MCP_CONFIG_DIR || path.j
 const googleCredentialsPath = path.resolve(process.env.GOOGLE_OAUTH_CREDENTIALS || path.join(googleConfigDir, "google_credentials.json"));
 const googleTokenPath = path.resolve(process.env.GOOGLE_OAUTH_TOKEN || path.join(googleConfigDir, "google_token.json"));
 const googleProxy = process.env.GOOGLE_MCP_PROXY || "";
+const webProxy = process.env.WEB_MCP_PROXY || process.env.GOOGLE_MCP_PROXY || "";
 
 function text(content) {
   return { content: [{ type: "text", text: String(content ?? "") }] };
@@ -207,6 +208,84 @@ async function curlJson(url, options = {}) {
     throw new Error(`Google API error: ${message}`);
   }
   return parsed;
+}
+
+async function curlText(url, options = {}) {
+  const args = [
+    "-sS",
+    "-L",
+    "--compressed",
+    "--max-time",
+    String(Math.ceil((options.timeoutMs || 45_000) / 1000)),
+    "-A",
+    options.userAgent || "personal-mcp/0.1 (+https://modelcontextprotocol.io)",
+  ];
+  const proxy = options.proxy ?? webProxy;
+  if (proxy) args.push("-x", proxy);
+  for (const [name, value] of Object.entries(options.headers || {})) {
+    args.push("-H", `${name}: ${value}`);
+  }
+  args.push(url);
+  const result = await runCommand("curl", args, {
+    timeoutMs: options.timeoutMs || 45_000,
+  });
+  return result.stdout;
+}
+
+function decodeHtmlEntities(value) {
+  const named = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: "\"",
+    apos: "'",
+    nbsp: " ",
+  };
+  return String(value || "").replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity) => {
+    if (entity[0] === "#") {
+      const code = entity[1]?.toLowerCase() === "x"
+        ? Number.parseInt(entity.slice(2), 16)
+        : Number.parseInt(entity.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+    }
+    return named[entity] || match;
+  });
+}
+
+function stripHtml(html) {
+  return decodeHtmlEntities(String(html || "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<\/(p|div|section|article|header|footer|h[1-6]|li|tr|br)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim());
+}
+
+function assertHttpUrl(rawUrl) {
+  const url = new URL(rawUrl);
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error("Only http and https URLs are supported.");
+  }
+  return url;
+}
+
+function parseBingRss(xml, limit) {
+  const items = [];
+  const itemRegex = /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
+  let match;
+  while ((match = itemRegex.exec(xml)) && items.length < limit) {
+    const item = match[1];
+    const title = decodeHtmlEntities(item.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || "").trim();
+    const link = decodeHtmlEntities(item.match(/<link>([\s\S]*?)<\/link>/i)?.[1] || "").trim();
+    const snippet = stripHtml(item.match(/<description>([\s\S]*?)<\/description>/i)?.[1] || "");
+    const publishedAt = decodeHtmlEntities(item.match(/<pubDate>([\s\S]*?)<\/pubDate>/i)?.[1] || "").trim();
+    if (title && link) items.push({ title, url: link, snippet, publishedAt });
+  }
+  return items;
 }
 
 async function googleAccessToken() {
@@ -488,6 +567,55 @@ server.tool(
       "user",
     ], { timeoutMs: 30_000 });
     return text(result.stdout);
+  },
+);
+
+server.tool(
+  "web_search",
+  "Search the web using a free RSS search backend. Best for lightweight discovery; use web_fetch to read selected pages.",
+  {
+    query: z.string().min(1),
+    limit: z.number().int().min(1).max(20).default(5),
+    market: z.string().default("zh-CN").describe("Search language/market hint, e.g. zh-CN or en-US."),
+  },
+  async ({ query, limit, market }) => {
+    const params = new URLSearchParams({
+      q: query,
+      format: "rss",
+      setlang: market,
+    });
+    const xml = await curlText(`https://www.bing.com/search?${params}`, {
+      userAgent: "Mozilla/5.0 (compatible; personal-mcp/0.1)",
+    });
+    const results = parseBingRss(xml, limit);
+    return json({
+      query,
+      backend: "bing-rss",
+      results,
+      note: results.length ? undefined : "No results returned by the free RSS backend.",
+    });
+  },
+);
+
+server.tool(
+  "web_fetch",
+  "Fetch a web page and return readable text extracted from HTML.",
+  {
+    url: z.string().url(),
+    maxChars: z.number().int().min(500).max(50000).default(8000),
+  },
+  async ({ url, maxChars }) => {
+    const parsed = assertHttpUrl(url);
+    const html = await curlText(parsed.toString(), {
+      userAgent: "Mozilla/5.0 (compatible; personal-mcp/0.1)",
+    });
+    const content = stripHtml(html);
+    return json({
+      url: parsed.toString(),
+      chars: content.length,
+      content: content.slice(0, maxChars),
+      truncated: content.length > maxChars,
+    });
   },
 );
 

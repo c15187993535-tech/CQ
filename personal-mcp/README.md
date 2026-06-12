@@ -6,6 +6,7 @@ This MCP server wraps the personal integrations that have already been verified 
 - GitHub API via `GITHUB_PERSONAL_ACCESS_TOKEN`
 - Feishu/Lark via `lark-cli`
 - Google Drive/Docs/Sheets via local OAuth files
+- Web search/fetch via free RSS search and direct page fetching
 
 ## Run
 
@@ -24,6 +25,7 @@ startup_timeout_sec = 60
 
 [mcp_servers.personal_mcp.env]
 OBSIDIAN_VAULT_PATH = "/Users/mac/Desktop/知识库"
+WEB_MCP_PROXY = "http://127.0.0.1:7897"
 ```
 
 `GITHUB_PERSONAL_ACCESS_TOKEN` is read from the environment.
@@ -80,3 +82,16 @@ This creates:
 - `google_drive_search`
 - `google_docs_get`
 - `google_sheets_values`
+
+## Web tools
+
+The web tools are free and do not require an API key:
+
+- `web_search`: lightweight search using Bing RSS.
+- `web_fetch`: fetch a page and extract readable text from HTML.
+
+Set `WEB_MCP_PROXY` when direct access is blocked:
+
+```bash
+export WEB_MCP_PROXY=http://127.0.0.1:7897
+```
