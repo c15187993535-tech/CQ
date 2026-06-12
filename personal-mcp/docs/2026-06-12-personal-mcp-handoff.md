@@ -408,6 +408,90 @@ mcp_health_check({ "includeNetwork": true })
 - 数据库 MCP 如果后续接入，建议先做只读账号，只允许 `SELECT`。
 - 微信 MCP 不建议直接自动发消息，优先做导出记录读取和总结。
 
+## 11.1 Claude / Codex 配置安全优化
+
+已在 2026-06-12 对 Claude Code / Codex 本机配置做过一次安全收敛，目标是减少明文密钥和过宽权限。
+
+### 已完成的调整
+
+| 项目 | 调整前 | 调整后 |
+| --- | --- | --- |
+| Claude `ANTHROPIC_AUTH_TOKEN` | 写在 `~/.claude/settings.json` | 已移除，改由 shell 环境变量提供 |
+| Codex `ANTHROPIC_AUTH_TOKEN` | 写在 `~/.codex/config.toml` | 已移除，改由 shell 环境变量提供 |
+| Claude allow 权限 | 约 70 条，含 `curl *`、`open *`、`npm install *` 等宽泛项 | 收窄到 41 条，移除高风险通配规则 |
+| Claude `additionalDirectories` | 包含整个 `/Users/mac` 和旧临时目录 | 收窄到 `/Users/mac/Desktop/知识库` 与 `/Users/mac/Documents/MCP 建设` |
+| Claude MCP | 未配置 `personal_mcp` | 已配置 `personal_mcp`，指向本项目入口 |
+
+### 当前 Claude MCP 配置
+
+位置：
+
+```text
+~/.claude/settings.json
+```
+
+关键配置：
+
+```json
+{
+  "mcpServers": {
+    "personal_mcp": {
+      "command": "node",
+      "args": [
+        "/Users/mac/Documents/MCP 建设/personal-mcp/src/index.js"
+      ],
+      "env": {
+        "OBSIDIAN_VAULT_PATH": "/Users/mac/Desktop/知识库",
+        "GOOGLE_MCP_PROXY": "http://127.0.0.1:7897",
+        "WEB_MCP_PROXY": "http://127.0.0.1:7897"
+      }
+    }
+  }
+}
+```
+
+### 当前 token 策略
+
+`ANTHROPIC_AUTH_TOKEN` 不再放在 Claude / Codex 配置文件中，而是写入：
+
+```text
+~/.zshrc
+~/.zprofile
+```
+
+验证方式：
+
+```bash
+zsh -lc 'source ~/.zshrc >/dev/null 2>&1; if [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then echo present; else echo missing; fi'
+```
+
+### 备份文件
+
+调整前已自动备份：
+
+```text
+~/.claude/settings.json.bak-mcp-opt-20260612112922
+~/.claude/settings.local.json.bak-mcp-opt-20260612112922
+~/.codex/config.toml.bak-mcp-opt-20260612112922
+~/.zshrc.bak-mcp-opt-20260612112922
+~/.zprofile.bak-mcp-opt-20260612112922
+```
+
+### 配置优化后的验证结果
+
+已完成以下验证：
+
+```text
+Claude JSON 配置可解析
+配置文件脱敏扫描未发现明文 ANTHROPIC_AUTH_TOKEN
+shell 环境变量 ANTHROPIC_AUTH_TOKEN=present
+npm run check 通过
+mcp_health_check status=ok
+GitHub fallbackAvailable=true
+```
+
+注意：飞书健康检查可能显示 `needs_refresh`，但整体状态仍为 `ok`，因为用户态 token 可在后续飞书 API 调用中自动刷新。
+
 ## 12. 后续建议
 
 优先级建议：
