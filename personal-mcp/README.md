@@ -250,3 +250,17 @@ Safety limits:
 
 Use `includeNetwork: false` for a fast local-only check, or `includeNetwork: true` for end-to-end validation.
 When diagnosing failures, prefer the split tools first so one slow network provider does not hide the rest of the system.
+
+Network requests use direct access first and can fall back to `http://127.0.0.1:7897` when DNS/network access is restricted. Override with `GOOGLE_MCP_PROXY` or `WEB_MCP_PROXY`; disable the automatic local proxy with `PERSONAL_MCP_DISABLE_AUTO_PROXY=1`.
+
+## Write outbox
+
+When the current runtime cannot write to the Obsidian vault, Obsidian write tools queue the Markdown under `outbox/obsidian` instead of dropping the content. Lark update failures are queued under `outbox/lark`.
+
+Run this from a normal terminal to sync queued Obsidian files back into the vault:
+
+```bash
+npm run sync:outbox
+```
+
+Lark outbox files are listed by the same command and should be retried after `lark-cli auth status` shows a ready session.

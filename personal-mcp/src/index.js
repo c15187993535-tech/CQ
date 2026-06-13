@@ -10,12 +10,14 @@ import { z } from "zod";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(moduleDir, "..");
 const vaultRoot = path.resolve(process.env.OBSIDIAN_VAULT_PATH || "/Users/mac/Desktop/知识库");
+const outboxRoot = path.resolve(process.env.PERSONAL_MCP_OUTBOX || path.join(projectRoot, "outbox"));
 const defaultGithubOwner = process.env.GITHUB_OWNER || "c15187993535-tech";
 const googleConfigDir = path.resolve(process.env.GOOGLE_MCP_CONFIG_DIR || path.join(process.env.HOME || ".", ".config", "personal-mcp"));
 const googleCredentialsPath = path.resolve(process.env.GOOGLE_OAUTH_CREDENTIALS || path.join(googleConfigDir, "google_credentials.json"));
 const googleTokenPath = path.resolve(process.env.GOOGLE_OAUTH_TOKEN || path.join(googleConfigDir, "google_token.json"));
 const googleProxy = process.env.GOOGLE_MCP_PROXY || "";
 const webProxy = process.env.WEB_MCP_PROXY || process.env.GOOGLE_MCP_PROXY || "";
+const defaultLocalProxy = process.env.PERSONAL_MCP_DISABLE_AUTO_PROXY === "1" ? "" : "http://127.0.0.1:7897";
 const braveSearchApiKey = process.env.BRAVE_SEARCH_API_KEY || "";
 const sqliteRoots = (process.env.SQLITE_DB_ROOTS || path.join(projectRoot, "data", "sqlite"))
   .split(":")
@@ -31,6 +33,12 @@ function json(value) {
   return text(JSON.stringify(value, null, 2));
 }
 
+function proxyCandidates(primaryProxy) {
+  return [primaryProxy || "", "", defaultLocalProxy].filter((proxy, index, list) => (
+    proxy !== undefined && list.indexOf(proxy) === index
+  ));
+}
+
 function ensureInsideVault(inputPath) {
   const absolute = path.resolve(vaultRoot, inputPath || ".");
   const relative = path.relative(vaultRoot, absolute);
@@ -38,6 +46,52 @@ function ensureInsideVault(inputPath) {
     throw new Error(`Path is outside Obsidian vault: ${inputPath}`);
   }
   return absolute;
+}
+
+function safeOutboxSegment(value) {
+  return String(value || "untitled").replace(/[^\w.-]+/g, "_").slice(0, 120) || "untitled";
+}
+
+async function writeOutbox(kind, target, content) {
+  const relative = kind === "obsidian"
+    ? target
+    : `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeOutboxSegment(target)}.md`;
+  const file = path.resolve(outboxRoot, kind, relative);
+  if (!file.startsWith(path.resolve(outboxRoot, kind) + path.sep)) {
+    throw new Error(`Outbox path escapes allowed root: ${target}`);
+  }
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, content, "utf8");
+  return file;
+}
+
+async function writeVaultMarkdown(notePath, content, options = {}) {
+  const file = ensureInsideVault(notePath);
+  const mode = options.mode || "overwrite";
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    if (mode === "append") {
+      await fs.appendFile(file, `\n${content}`, "utf8");
+    } else {
+      await fs.writeFile(file, content, "utf8");
+    }
+    return {
+      status: "written",
+      path: path.relative(vaultRoot, file),
+      file,
+    };
+  } catch (error) {
+    if (!["EACCES", "EPERM"].includes(error.code)) throw error;
+    const outboxFile = await writeOutbox("obsidian", notePath, content);
+    return {
+      status: "queued",
+      path: path.relative(vaultRoot, file),
+      file,
+      outboxFile,
+      error: error.message,
+      note: "Obsidian vault is not writable in this runtime; content was saved to the MCP outbox.",
+    };
+  }
 }
 
 function ensureInsideRoots(inputPath, roots, label) {
@@ -708,17 +762,59 @@ async function githubRequest(endpoint, options = {}) {
   const url = endpoint.startsWith("http") ? endpoint : `https://api.github.com${endpoint}`;
   const failures = [];
   for (const candidate of candidates) {
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        "Authorization": `Bearer ${candidate.token}`,
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        ...(options.headers || {}),
-      },
-    });
-    const body = await response.text();
+    const headers = {
+      "Authorization": `Bearer ${candidate.token}`,
+      "Accept": "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    };
+    let response;
+    let body;
     let parsed;
+    try {
+      if (webProxy) {
+        parsed = await curlJson(url, {
+          serviceName: "GitHub API",
+          method: options.method,
+          body: options.body,
+          headers,
+          proxy: webProxy,
+        });
+        if (parsed && typeof parsed === "object") {
+          Object.defineProperty(parsed, "__tokenSource", {
+            value: candidate.source,
+            enumerable: false,
+          });
+        }
+        return parsed;
+      }
+      response = await fetch(url, {
+        ...options,
+        headers,
+      });
+      body = await response.text();
+    } catch (error) {
+      try {
+        parsed = await curlJson(url, {
+          serviceName: "GitHub API",
+          method: options.method,
+          body: options.body,
+          headers,
+          proxy: webProxy,
+        });
+        if (parsed && typeof parsed === "object") {
+          Object.defineProperty(parsed, "__tokenSource", {
+            value: candidate.source,
+            enumerable: false,
+          });
+        }
+        return parsed;
+      } catch (curlError) {
+        failures.push(`${candidate.source}: ${error.message}; ${curlError.message}`);
+      }
+      continue;
+    }
     try {
       parsed = body ? JSON.parse(body) : null;
     } catch {
@@ -806,97 +902,107 @@ async function curlJson(url, options = {}) {
   const statusMarker = "__PERSONAL_MCP_HTTP_STATUS__:";
   const maxAttempts = options.maxAttempts || 3;
   const timeoutMs = options.timeoutMs || 45_000;
-  const proxy = options.proxy ?? googleProxy;
   const serviceName = options.serviceName || "HTTP API";
-  const args = [
-    "-sS",
-    "-L",
-    "--compressed",
-    "--max-time",
-    String(Math.ceil(timeoutMs / 1000)),
-    "-w",
-    `\n${statusMarker}%{http_code}`,
-  ];
-  if (proxy) args.push("-x", proxy);
-  if (options.method) args.push("-X", options.method);
-  for (const [name, value] of Object.entries(options.headers || {})) {
-    args.push("-H", `${name}: ${value}`);
-  }
-  if (options.body !== undefined) {
-    args.push("--data-binary", "@-");
-  }
-  args.push(url);
 
   let lastError;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      const result = await runCommand("curl", args, {
-        input: options.body,
-        timeoutMs: timeoutMs + 5_000,
-        errorLabel: `${serviceName} curl request`,
-      });
-      const markerIndex = result.stdout.lastIndexOf(statusMarker);
-      if (markerIndex < 0) {
-        throw new Error(`${serviceName} response missing HTTP status marker`);
-      }
-      const rawBody = result.stdout.slice(0, markerIndex).trim();
-      const status = Number(result.stdout.slice(markerIndex + statusMarker.length).trim());
-      let parsed = null;
-      if (rawBody) {
-        try {
-          parsed = JSON.parse(rawBody);
-        } catch {
-          const excerpt = rawBody.replace(/\s+/g, " ").slice(0, 240);
-          throw new Error(`${serviceName} HTTP ${status || "unknown"} returned non-JSON response: ${excerpt}`);
-        }
-      }
+  for (const proxy of proxyCandidates(options.proxy ?? googleProxy)) {
+    const args = [
+      "-sS",
+      "-L",
+      "--compressed",
+      "--max-time",
+      String(Math.ceil(timeoutMs / 1000)),
+      "-w",
+      `\n${statusMarker}%{http_code}`,
+    ];
+    if (proxy) args.push("-x", proxy);
+    if (options.method) args.push("-X", options.method);
+    for (const [name, value] of Object.entries(options.headers || {})) {
+      args.push("-H", `${name}: ${value}`);
+    }
+    if (options.body !== undefined) {
+      args.push("--data-binary", "@-");
+    }
+    args.push(url);
 
-      const errorMessage = parsed?.error_description
-        || parsed?.error?.message
-        || parsed?.message
-        || (typeof parsed?.error === "string" ? parsed.error : "");
-      if (status < 200 || status >= 300 || parsed?.error) {
-        const message = errorMessage || `unexpected response status ${status}`;
-        const transient = status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
-        if (transient && attempt < maxAttempts) {
-          lastError = new Error(`${serviceName} HTTP ${status}: ${message}`);
-          await sleep(300 * attempt);
-          continue;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const result = await runCommand("curl", args, {
+          input: options.body,
+          timeoutMs: timeoutMs + 5_000,
+          errorLabel: `${serviceName} curl request${proxy ? ` via ${proxy}` : ""}`,
+        });
+        const markerIndex = result.stdout.lastIndexOf(statusMarker);
+        if (markerIndex < 0) {
+          throw new Error(`${serviceName} response missing HTTP status marker`);
         }
-        throw new Error(`${serviceName} HTTP ${status}: ${message}`);
+        const rawBody = result.stdout.slice(0, markerIndex).trim();
+        const status = Number(result.stdout.slice(markerIndex + statusMarker.length).trim());
+        let parsed = null;
+        if (rawBody) {
+          try {
+            parsed = JSON.parse(rawBody);
+          } catch {
+            const excerpt = rawBody.replace(/\s+/g, " ").slice(0, 240);
+            throw new Error(`${serviceName} HTTP ${status || "unknown"} returned non-JSON response: ${excerpt}`);
+          }
+        }
+
+        const errorMessage = parsed?.error_description
+          || parsed?.error?.message
+          || parsed?.message
+          || (typeof parsed?.error === "string" ? parsed.error : "");
+        if (status < 200 || status >= 300 || parsed?.error) {
+          const message = errorMessage || `unexpected response status ${status}`;
+          const transient = status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+          if (transient && attempt < maxAttempts) {
+            lastError = new Error(`${serviceName} HTTP ${status}: ${message}`);
+            await sleep(300 * attempt);
+            continue;
+          }
+          throw new Error(`${serviceName} HTTP ${status}: ${message}`);
+        }
+        return parsed;
+      } catch (error) {
+        lastError = error;
+        const message = error.message || "";
+        const transient = /timed out|Could not resolve host|Failed to connect|Connection refused|HTTP (408|409|425|429|5\d\d)/i.test(message);
+        if (!transient || attempt === maxAttempts) break;
+        await sleep(300 * attempt);
       }
-      return parsed;
-    } catch (error) {
-      lastError = error;
-      const message = error.message || "";
-      const transient = /timed out|Could not resolve host|Failed to connect|Connection refused|HTTP (408|409|425|429|5\d\d)/i.test(message);
-      if (!transient || attempt === maxAttempts) break;
-      await sleep(300 * attempt);
     }
   }
   throw lastError;
 }
 
 async function curlText(url, options = {}) {
-  const args = [
-    "-sS",
-    "-L",
-    "--compressed",
-    "--max-time",
-    String(Math.ceil((options.timeoutMs || 45_000) / 1000)),
-    "-A",
-    options.userAgent || "personal-mcp/0.1 (+https://modelcontextprotocol.io)",
-  ];
-  const proxy = options.proxy ?? webProxy;
-  if (proxy) args.push("-x", proxy);
-  for (const [name, value] of Object.entries(options.headers || {})) {
-    args.push("-H", `${name}: ${value}`);
+  let lastError;
+  for (const proxy of proxyCandidates(options.proxy ?? webProxy)) {
+    const args = [
+      "-sS",
+      "-L",
+      "--compressed",
+      "--max-time",
+      String(Math.ceil((options.timeoutMs || 45_000) / 1000)),
+      "-A",
+      options.userAgent || "personal-mcp/0.1 (+https://modelcontextprotocol.io)",
+    ];
+    if (proxy) args.push("-x", proxy);
+    for (const [name, value] of Object.entries(options.headers || {})) {
+      args.push("-H", `${name}: ${value}`);
+    }
+    args.push(url);
+    try {
+      const result = await runCommand("curl", args, {
+        timeoutMs: options.timeoutMs || 45_000,
+        errorLabel: `curl${proxy ? ` via ${proxy}` : ""}`,
+      });
+      return result.stdout;
+    } catch (error) {
+      lastError = error;
+    }
   }
-  args.push(url);
-  const result = await runCommand("curl", args, {
-    timeoutMs: options.timeoutMs || 45_000,
-  });
-  return result.stdout;
+  throw lastError;
 }
 
 async function sqliteJson(dbPath, sql, options = {}) {
@@ -1114,6 +1220,7 @@ async function probeSearchConfigHealth() {
     braveConfigured: Boolean(braveSearchApiKey),
     fallback: "bing-rss",
     proxy: webProxy || null,
+    autoProxy: defaultLocalProxy || null,
   };
 }
 
@@ -1269,10 +1376,9 @@ server.tool(
     content: z.string(),
   },
   async ({ notePath, content }) => {
-    const file = ensureInsideVault(notePath);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, content, "utf8");
-    return text(`Wrote ${path.relative(vaultRoot, file)}`);
+    const result = await writeVaultMarkdown(notePath, content);
+    if (result.status === "written") return text(`Wrote ${result.path}`);
+    return json(result);
   },
 );
 
@@ -1525,24 +1631,35 @@ async function larkFetchMarkdown(doc) {
 }
 
 async function larkOverwriteMarkdown(doc, markdown) {
-  const result = await runCommand("lark-cli", [
-    "docs",
-    "+update",
-    "--api-version",
-    "v2",
-    "--doc",
-    doc,
-    "--command",
-    "overwrite",
-    "--doc-format",
-    "markdown",
-    "--content",
-    "-",
-  ], {
-    input: markdown,
-    timeoutMs: 45_000,
-  });
-  return JSON.parse(result.stdout);
+  try {
+    const result = await runCommand("lark-cli", [
+      "docs",
+      "+update",
+      "--api-version",
+      "v2",
+      "--doc",
+      doc,
+      "--command",
+      "overwrite",
+      "--doc-format",
+      "markdown",
+      "--content",
+      "-",
+    ], {
+      input: markdown,
+      timeoutMs: 45_000,
+    });
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    const outboxFile = await writeOutbox("lark", doc, markdown);
+    return {
+      ok: false,
+      queued: true,
+      outboxFile,
+      error: error.message,
+      note: "Lark document update failed in this runtime; content was saved to the MCP outbox.",
+    };
+  }
 }
 
 server.tool(
@@ -1578,10 +1695,13 @@ server.tool(
     const response = await larkOverwriteMarkdown(doc, updated);
     return json({
       ok: Boolean(response.ok),
+      queued: Boolean(response.queued),
       doc,
       title,
       revisionId: response.data?.document?.revision_id,
       url: response.data?.document?.url,
+      outboxFile: response.outboxFile,
+      note: response.note,
     });
   },
 );
@@ -1601,11 +1721,14 @@ server.tool(
     const response = await larkOverwriteMarkdown(doc, updated);
     return json({
       ok: Boolean(response.ok),
+      queued: Boolean(response.queued),
       doc,
       title,
       status,
       revisionId: response.data?.document?.revision_id,
       url: response.data?.document?.url,
+      outboxFile: response.outboxFile,
+      note: response.note,
     });
   },
 );
@@ -1736,19 +1859,16 @@ server.tool(
     mode: z.enum(["overwrite", "append"]).default("overwrite"),
   },
   async ({ notePath, title, content, mode }) => {
-    const file = ensureInsideVault(notePath);
-    await fs.mkdir(path.dirname(file), { recursive: true });
     const body = title ? `# ${title}\n\n${content.trim()}\n` : `${content.trim()}\n`;
-    if (mode === "append") {
-      await fs.appendFile(file, `\n${body}`, "utf8");
-    } else {
-      await fs.writeFile(file, body, "utf8");
-    }
+    const result = await writeVaultMarkdown(notePath, body, { mode });
     return json({
       source: "obsidian",
-      path: path.relative(vaultRoot, file),
+      path: result.path,
       mode,
       bytes: Buffer.byteLength(body),
+      status: result.status,
+      outboxFile: result.outboxFile,
+      note: result.note,
     });
   },
 );
@@ -1875,14 +1995,15 @@ server.tool(
 ${JSON.stringify(parsed, null, 2)}
 \`\`\`
 `;
-    const file = ensureInsideVault(notePath);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, body, "utf8");
+    const result = await writeVaultMarkdown(notePath, body);
     return json({
       source: "obsidian",
-      path: path.relative(vaultRoot, file),
+      path: result.path,
       title: pack.titles[0],
       bytes: Buffer.byteLength(body),
+      status: result.status,
+      outboxFile: result.outboxFile,
+      note: result.note,
     });
   },
 );

@@ -512,6 +512,50 @@ mcp_health_lark=status ok
 GitHub / Google / Web 在当前 Codex 沙箱内表现为 DNS 受限；分项工具能清楚显示具体失败项。
 ```
 
+### DNS / 代理处理
+
+本轮已加入自动代理 fallback：
+
+```text
+直连失败 -> 自动尝试 http://127.0.0.1:7897
+```
+
+相关环境变量：
+
+```text
+GOOGLE_MCP_PROXY=http://127.0.0.1:7897
+WEB_MCP_PROXY=http://127.0.0.1:7897
+PERSONAL_MCP_DISABLE_AUTO_PROXY=1  # 如需关闭自动代理
+```
+
+说明：
+
+- 当前 Codex 沙箱内无法连接本机代理端口，因此仍可能显示 `Failed to connect to 127.0.0.1:7897`。
+- 在真实 Mac 终端或 Claude Code 正常本机环境中，若代理软件监听 `127.0.0.1:7897`，GitHub / Google / Web 请求会自动走 fallback。
+- 健康检查中的 `search_config.autoProxy` 会显示当前自动代理地址。
+
+### Obsidian / 飞书写入失败处理
+
+本轮已加入 outbox 保护：
+
+```text
+Obsidian 写入 EPERM/EACCES -> 写入 personal-mcp/outbox/obsidian
+飞书 docs +update 失败 -> 写入 personal-mcp/outbox/lark
+```
+
+同步 Obsidian outbox：
+
+```bash
+cd "/Users/mac/Documents/MCP 建设/personal-mcp"
+npm run sync:outbox
+```
+
+注意：
+
+- `outbox/` 已加入 `.gitignore`，不会把个人内容提交到 GitHub。
+- `npm run sync:outbox` 会把 `outbox/obsidian` 复制回真实 Obsidian vault。
+- 飞书 outbox 会被列出；需要在 `lark-cli auth status` ready 后重试写入。
+
 ### 网页搜索验证
 
 ```text

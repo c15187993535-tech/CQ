@@ -1,4 +1,5 @@
 node_modules/
+outbox/
 data/sqlite/*.db
 data/sqlite/*.sqlite
 data/sqlite/*.sqlite3
