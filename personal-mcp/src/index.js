@@ -325,6 +325,118 @@ function parseKnowledgeSources(sources) {
   return String(sources || "obsidian").split(",").map((source) => source.trim()).filter(Boolean);
 }
 
+function parseKeyValueLines(textValue) {
+  const result = {};
+  for (const line of String(textValue || "").split(/\r?\n/)) {
+    const match = line.match(/^\s*([^:：]{2,20})[:：]\s*(.+?)\s*$/);
+    if (!match) continue;
+    result[match[1].trim()] = match[2].trim();
+  }
+  return result;
+}
+
+function parseContentBrief(input) {
+  const textValue = String(input || "").trim();
+  const fields = parseKeyValueLines(textValue);
+  const topic = fields["主题"] || fields.topic || textValue.match(/主题[是为：:]\s*([^\n，。]+)/)?.[1]?.trim() || textValue.slice(0, 80);
+  const audience = fields["目标读者"] || fields["读者"] || fields.audience || "对这个主题感兴趣的普通读者";
+  const purpose = fields["文章目的"] || fields["目的"] || fields.purpose || "讲清楚观点，并给读者可执行的建议";
+  const style = fields["风格"] || fields.style || "通俗、具体、有故事感";
+  const length = fields["字数"] || fields.length || "1500 字左右";
+  const mustInclude = fields["必须包含"] || fields["结构"] || fields["输出"] || "";
+  const reference = fields["参考资料"] || fields.reference || "";
+  return {
+    topic,
+    audience,
+    purpose,
+    style,
+    length,
+    mustInclude,
+    reference,
+    raw: textValue,
+  };
+}
+
+function contentOutline(brief) {
+  return [
+    { heading: "开头：用一个真实问题引入", goal: `让${brief.audience}意识到这个主题和自己有关。` },
+    { heading: `为什么要关注：${brief.topic}`, goal: "解释背景、痛点和机会，避免直接堆概念。" },
+    { heading: "核心概念：用普通话讲清楚", goal: "给出简明定义、类比和边界。" },
+    { heading: "我的做法：拆成可复用步骤", goal: "按步骤说明方法，让读者能照着做。" },
+    { heading: "踩坑与取舍", goal: "写出限制、风险、安全边界和替代方案。" },
+    { heading: "普通人怎么开始", goal: "给出低门槛行动清单。" },
+    { heading: "结尾：给一个明确行动建议", goal: "收束观点，鼓励读者做第一步。" },
+  ];
+}
+
+function contentDraftScaffold(brief, outline, materials = []) {
+  const materialNotes = materials.length
+    ? materials.slice(0, 5).map((item, index) => `${index + 1}. ${item.title || item.id}: ${item.excerpt || item.content || ""}`).join("\n")
+    : "暂无外部素材，先基于任务要求生成初稿。";
+  return `# ${brief.topic}
+
+## 写作要求
+
+- 目标读者：${brief.audience}
+- 文章目的：${brief.purpose}
+- 风格：${brief.style}
+- 字数：${brief.length}
+- 必须包含：${brief.mustInclude || "按大纲完整展开"}
+
+## 可用素材
+
+${materialNotes}
+
+## 建议大纲
+
+${outline.map((item, index) => `${index + 1}. ${item.heading}\n   - ${item.goal}`).join("\n")}
+
+## 初稿写作提示
+
+请按上面大纲写一篇完整中文文章。要求：
+
+1. 开头不要空泛，先写一个具体场景或问题。
+2. 每个小节只讲一个重点，少用抽象口号。
+3. 把工具、流程、限制和行动建议讲清楚。
+4. 结尾给读者一个今天就能做的动作。
+5. 输出时包含标题备选、摘要、正文和可发布排版。`;
+}
+
+function contentPublishPack(brief, draft = "") {
+  const cleanTopic = brief.topic.replace(/^写公众号[:：]?\s*/, "").trim();
+  const topicLabel = cleanTopic.replace(/\s+/g, " ");
+  const firstTitle = /工作台/.test(topicLabel)
+    ? `我如何搭建自己的 ${topicLabel}`
+    : `我用 ${topicLabel} 搭了一个个人 AI 工作台`;
+  const titles = [
+    firstTitle,
+    `${topicLabel}：普通人也能上手的 AI 效率方案`,
+    `从手机一句话开始：我的 ${topicLabel} 实践`,
+    `别只会聊天了：用 ${topicLabel} 让 AI 真正干活`,
+    `一篇讲清楚 ${topicLabel} 的搭建思路`,
+  ];
+  const summary = `这篇文章面向${brief.audience}，用${brief.style}的方式讲清楚${topicLabel}，并给出可执行的开始路径。`;
+  const layout = `# 标题
+${titles[0]}
+
+> 摘要：${summary}
+
+## 正文
+
+${draft || "在这里粘贴正文初稿。"}
+
+---
+
+## 发布前检查
+
+- 标题是否具体
+- 开头是否有场景
+- 每节是否有明确结论
+- 是否给出行动建议
+- 是否删除敏感 token、个人密钥和不可公开链接`;
+  return { titles, summary, layout };
+}
+
 async function walkSqliteDatabases(dir, options = {}) {
   const { maxFiles = 200 } = options;
   const files = [];
@@ -1378,6 +1490,140 @@ server.tool(
       source: "obsidian",
       path: path.relative(vaultRoot, file),
       mode,
+      bytes: Buffer.byteLength(body),
+    });
+  },
+);
+
+server.tool(
+  "content_brief_parse",
+  "Parse a Chinese content-writing request into a structured brief.",
+  {
+    input: z.string().min(1).describe("Raw content request, e.g. from Feishu AI inbox."),
+  },
+  async ({ input }) => json(parseContentBrief(input)),
+);
+
+server.tool(
+  "content_outline",
+  "Create a reusable article outline from a structured or raw writing brief.",
+  {
+    brief: z.string().min(1).describe("Raw request or JSON/stringified structured brief."),
+  },
+  async ({ brief }) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(brief);
+    } catch {
+      parsed = parseContentBrief(brief);
+    }
+    return json({ brief: parsed, outline: contentOutline(parsed) });
+  },
+);
+
+server.tool(
+  "content_research",
+  "Search knowledge sources for materials related to a content brief.",
+  {
+    brief: z.string().min(1),
+    sources: z.string().default("obsidian"),
+    limit: z.number().int().min(1).max(20).default(5),
+    includeNetwork: z.boolean().default(false),
+  },
+  async ({ brief, sources, limit, includeNetwork }) => {
+    const parsed = parseContentBrief(brief);
+    const requested = parseKnowledgeSources(sources);
+    const results = [];
+    const errors = [];
+    for (const source of requested) {
+      const remaining = Math.max(1, limit - results.length);
+      try {
+        if (source === "obsidian") {
+          results.push(...await searchObsidianKnowledge(parsed.topic, { limit: remaining }));
+        } else if (!includeNetwork) {
+          errors.push({ source, error: "Network-backed source skipped because includeNetwork=false." });
+        } else if (source === "lark") {
+          results.push(...await searchLarkKnowledge(parsed.topic, { limit: remaining }));
+        } else if (source === "google_drive") {
+          results.push(...await searchGoogleDriveKnowledge(parsed.topic, { limit: remaining }));
+        } else if (source === "web") {
+          results.push(...await searchWebKnowledge(parsed.topic, { limit: remaining }));
+        } else {
+          errors.push({ source, error: "Unknown knowledge source." });
+        }
+      } catch (error) {
+        errors.push({ source, error: error.message });
+      }
+      if (results.length >= limit) break;
+    }
+    return json({ brief: parsed, results: results.slice(0, limit), errors });
+  },
+);
+
+server.tool(
+  "content_draft_pack",
+  "Generate an article drafting pack: brief, outline, materials, and drafting prompt.",
+  {
+    brief: z.string().min(1),
+    materialsJson: z.string().default("[]").describe("Optional JSON array of materials from content_research/knowledge_search."),
+  },
+  async ({ brief, materialsJson }) => {
+    const parsed = parseContentBrief(brief);
+    let materials = [];
+    try {
+      materials = JSON.parse(materialsJson);
+      if (!Array.isArray(materials)) materials = [];
+    } catch {}
+    const outline = contentOutline(parsed);
+    return json({
+      brief: parsed,
+      outline,
+      draftingPrompt: contentDraftScaffold(parsed, outline, materials),
+    });
+  },
+);
+
+server.tool(
+  "content_publish_pack",
+  "Create a WeChat Official Account publishing package from a brief and draft.",
+  {
+    brief: z.string().min(1),
+    draft: z.string().default(""),
+  },
+  async ({ brief, draft }) => {
+    const parsed = parseContentBrief(brief);
+    return json({ brief: parsed, ...contentPublishPack(parsed, draft) });
+  },
+);
+
+server.tool(
+  "content_save_to_obsidian",
+  "Save generated content to the Obsidian knowledge vault.",
+  {
+    notePath: z.string().describe("Vault-relative markdown path."),
+    brief: z.string().min(1),
+    draft: z.string().min(1),
+  },
+  async ({ notePath, brief, draft }) => {
+    const parsed = parseContentBrief(brief);
+    const pack = contentPublishPack(parsed, draft);
+    const body = `${pack.layout}
+
+---
+
+## 写作 Brief
+
+\`\`\`json
+${JSON.stringify(parsed, null, 2)}
+\`\`\`
+`;
+    const file = ensureInsideVault(notePath);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, body, "utf8");
+    return json({
+      source: "obsidian",
+      path: path.relative(vaultRoot, file),
+      title: pack.titles[0],
       bytes: Buffer.byteLength(body),
     });
   },

@@ -10,6 +10,7 @@ This MCP server wraps the personal integrations that have already been verified 
 - Web search/fetch via optional Brave Search or free Bing RSS fallback
 - SQLite readonly database inspection/query tools
 - Unified knowledge tools across Obsidian plus optional network-backed sources
+- Content generation workflow tools for WeChat Official Account-style articles
 - One-shot health checks across the configured integrations
 
 ## Run
@@ -158,6 +159,29 @@ knowledge_write_note({ "notePath": "03-工具库/调研结果.md", "title": "调
 ```
 
 Set `includeNetwork: true` in `knowledge_search` to include `lark`, `google_drive`, or `web`.
+
+## Content generation tools
+
+These tools turn a mobile task or writing request into a structured article workflow:
+
+- `content_brief_parse`: parse a raw Chinese writing request into topic, audience, purpose, style, length, and constraints.
+- `content_research`: search knowledge sources for related materials.
+- `content_outline`: generate a reusable article outline.
+- `content_draft_pack`: create the drafting prompt and material pack for the AI writer.
+- `content_publish_pack`: produce title options, summary, layout, and pre-publish checklist.
+- `content_save_to_obsidian`: save the finished draft/publish pack into the Obsidian vault.
+
+Recommended mobile flow:
+
+```text
+飞书 AI 指令收件箱写公众号任务
+-> content_brief_parse
+-> content_research
+-> content_draft_pack
+-> AI writes the article
+-> content_publish_pack
+-> lark_inbox_complete_task writes the result back to phone
+```
 
 ## Web tools
 

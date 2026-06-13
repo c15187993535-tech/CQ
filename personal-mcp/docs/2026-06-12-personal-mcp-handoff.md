@@ -15,6 +15,7 @@
 | 飞书 AI 指令收件箱 | 已跑通 | 手机飞书写任务，Mac 上 AI 读取待处理任务并把结果写回 |
 | Google Drive / Docs / Sheets | 已跑通 | 使用本地 OAuth 文件查询账号、搜索 Drive、读取 Docs / Sheets |
 | 统一知识库 MCP | 已跑通 | 统一搜索/读取/写入 Obsidian，并可选接入飞书、Google Drive、网页 |
+| 内容生成 MCP | 已跑通 | 面向公众号/长文写作，支持 brief 解析、素材检索、大纲、发布包和 Obsidian 保存 |
 | 网页搜索 / 网页读取 | 已跑通 | `web_search` 免费走 Bing RSS；可选 Brave Search；`web_fetch` 抓取网页正文 |
 | SQLite 只读数据库 | 已跑通 | 仅允许访问白名单目录内的 `.db` / `.sqlite` / `.sqlite3`，只支持 `SELECT` / `WITH` 查询 |
 | 健康检查 | 已跑通 | `mcp_health_check` 一键检查整套集成 |
@@ -187,7 +188,7 @@ https://my.feishu.cn/docx/EkRedV11koOJbrxooz9cACasnPe
 lark_inbox_fetch_pending -> 成功读取“示例任务”
 lark_inbox_add_task -> 成功追加“MCP 写回验证”
 lark_inbox_complete_task -> 成功写入结果并标记已完成
-tools_count=36
+tools_count=42
 ```
 
 手机使用方式：
@@ -246,6 +247,43 @@ knowledge_write_note -> 可写入 Obsidian 笔记
 knowledge_read("../outside.md") -> 被路径保护拦截
 ```
 
+### 内容生成 MCP
+
+本轮新增内容生产工作流工具，目标是把手机飞书里的一句“写一篇公众号”变成可执行的写作链路。
+
+新增工具：
+
+```text
+content_brief_parse
+content_research
+content_outline
+content_draft_pack
+content_publish_pack
+content_save_to_obsidian
+```
+
+推荐流程：
+
+```text
+手机飞书 AI 指令收件箱写公众号任务
+-> content_brief_parse 解析主题/读者/风格/字数/约束
+-> content_research 从知识库找素材
+-> content_draft_pack 生成大纲和写作提示
+-> AI 根据提示写正文
+-> content_publish_pack 生成标题/摘要/排版/检查清单
+-> lark_inbox_complete_task 把结果写回飞书，手机查看
+```
+
+已验证：
+
+```text
+content_brief_parse -> 成功解析“MCP 个人工作台”公众号 brief
+content_research -> 可从 Obsidian 找素材，并在 includeNetwork=false 时跳过 web
+content_draft_pack -> 生成初稿写作提示
+content_publish_pack -> 生成 5 个标题、摘要、发布排版和检查清单
+content_save_to_obsidian -> 成功写入 03-工具库/content-test.md
+```
+
 ### SQLite
 
 数据库白名单目录：
@@ -269,7 +307,7 @@ knowledge_read("../outside.md") -> 被路径保护拦截
 
 ## 5. MCP 工具清单
 
-当前 `personal_mcp` 一共注册 36 个工具：
+当前 `personal_mcp` 一共注册 42 个工具：
 
 ```text
 obsidian_list_notes
@@ -304,6 +342,12 @@ knowledge_sources
 knowledge_search
 knowledge_read
 knowledge_write_note
+content_brief_parse
+content_research
+content_outline
+content_draft_pack
+content_publish_pack
+content_save_to_obsidian
 sqlite_list_databases
 sqlite_list_tables
 sqlite_describe_table
@@ -347,9 +391,10 @@ npm audit --omit=dev --audit-level=moderate
 覆盖内容：
 
 ```text
-MCP 工具注册数量 = 36
+MCP 工具注册数量 = 42
 飞书 AI 指令收件箱模板/解析工具
 统一知识库 MCP 搜索/读取/写入/路径保护
+内容生成 MCP brief/素材/大纲/发布包/保存
 Obsidian 读/写/路径越权拦截
 SQLite 列库/列表/字段结构/聚合查询
 SQLite DELETE、多语句、越权路径拦截
@@ -501,7 +546,7 @@ lark_inbox_complete_task
 验证结果：
 
 ```text
-tools_count=36
+tools_count=42
 lark_inbox_fetch_pending -> 读取到示例任务
 lark_inbox_add_task -> revision_id=5
 lark_inbox_complete_task -> revision_id=7
@@ -523,12 +568,37 @@ knowledge_write_note
 验证结果：
 
 ```text
-tools_count=36
+tools_count=42
 knowledge_sources -> ok
 knowledge_search(query="Knowledge MCP", sources="obsidian,web", includeNetwork=false) -> 返回 Obsidian 结果并跳过 web
 knowledge_read(source="obsidian") -> 成功读取测试笔记
 knowledge_write_note -> 成功写入 03-工具库/knowledge-test.md
 knowledge_read("../outside.md") -> 被拦截
+```
+
+## 6.5 内容生成 MCP 验证
+
+新增 MCP 工具：
+
+```text
+content_brief_parse
+content_research
+content_outline
+content_draft_pack
+content_publish_pack
+content_save_to_obsidian
+```
+
+验证结果：
+
+```text
+tools_count=42
+content_brief_parse -> topic=MCP 个人工作台
+content_research -> 返回 Obsidian 素材，web 因 includeNetwork=false 被跳过
+content_outline -> 生成 7 段式公众号大纲
+content_draft_pack -> 生成初稿写作提示
+content_publish_pack -> 生成 5 个标题和发布前检查
+content_save_to_obsidian -> 写入 03-工具库/content-test.md
 ```
 
 ## 7. HTTP JSON 稳定性优化
@@ -727,11 +797,12 @@ GitHub fallbackAvailable=true
 最后一次端到端验证通过：
 
 ```text
-TOOLS_COUNT=36
+TOOLS_COUNT=42
 SQLite tools=ok
 Lark inbox tools=ok
 Lark inbox writeback=ok
 Knowledge tools=ok
+Content tools=ok
 npm test=passed
 npm audit=0 vulnerabilities
 mcp_health_check=status ok

@@ -85,6 +85,8 @@ async function main() {
 
   await fs.mkdir(path.join(vaultRoot, "06-日常"), { recursive: true });
   await fs.writeFile(path.join(vaultRoot, "06-日常", "2026-06-12.md"), "# Daily Note\n\nMCP test fixture\n\nKnowledge MCP seed.\n", "utf8");
+  await fs.mkdir(path.join(vaultRoot, "03-工具库"), { recursive: true });
+  await fs.writeFile(path.join(vaultRoot, "03-工具库", "mcp-content.md"), "# MCP 个人工作台\n\n用 MCP 搭建个人 AI 工作台，可以连接 Obsidian、飞书和 GitHub。\n", "utf8");
   await createSqliteFixture(dbPath);
   await writeJson(credentialsPath, {
     installed: {
@@ -137,10 +139,16 @@ async function main() {
       "knowledge_search",
       "knowledge_read",
       "knowledge_write_note",
+      "content_brief_parse",
+      "content_outline",
+      "content_research",
+      "content_draft_pack",
+      "content_publish_pack",
+      "content_save_to_obsidian",
     ]) {
       assert.ok(toolNames.includes(expected), `missing MCP tool: ${expected}`);
     }
-    assert.equal(toolNames.length, 36, "unexpected registered MCP tool count");
+    assert.equal(toolNames.length, 42, "unexpected registered MCP tool count");
 
     const inboxTemplate = textResult(await client.callTool({ name: "lark_inbox_template", arguments: {} }));
     assert.match(inboxTemplate, /# AI 指令收件箱/);
@@ -214,6 +222,55 @@ async function main() {
     assert.equal(knowledgeWrite.path, "03-工具库/knowledge-test.md");
     assert.match(await fs.readFile(path.join(vaultRoot, "03-工具库", "knowledge-test.md"), "utf8"), /Unified knowledge write path/);
     await assertToolError(client, "knowledge_read", { source: "obsidian", id: "../outside.md", maxChars: 1000 }, /outside Obsidian vault/i);
+
+    const contentBriefText = `主题：MCP 个人工作台
+目标读者：想用 AI 提高效率的普通用户
+风格：通俗、教程型、有故事感
+字数：1500 字左右
+必须包含：手机飞书输入任务、知识库搜索、结果写回飞书`;
+    const contentBrief = parseJsonResult(await client.callTool({
+      name: "content_brief_parse",
+      arguments: { input: contentBriefText },
+    }));
+    assert.equal(contentBrief.topic, "MCP 个人工作台");
+    assert.match(contentBrief.audience, /普通用户/);
+
+    const contentOutlineResult = parseJsonResult(await client.callTool({
+      name: "content_outline",
+      arguments: { brief: JSON.stringify(contentBrief) },
+    }));
+    assert.ok(contentOutlineResult.outline.length >= 5);
+
+    const contentResearch = parseJsonResult(await client.callTool({
+      name: "content_research",
+      arguments: { brief: contentBriefText, sources: "obsidian,web", includeNetwork: false, limit: 5 },
+    }));
+    assert.ok(contentResearch.results.some((item) => item.source === "obsidian"));
+    assert.ok(contentResearch.errors.some((item) => item.source === "web"));
+
+    const draftPack = parseJsonResult(await client.callTool({
+      name: "content_draft_pack",
+      arguments: { brief: contentBriefText, materialsJson: JSON.stringify(contentResearch.results) },
+    }));
+    assert.match(draftPack.draftingPrompt, /初稿写作提示/);
+
+    const publishPack = parseJsonResult(await client.callTool({
+      name: "content_publish_pack",
+      arguments: { brief: contentBriefText, draft: "这是一篇测试正文。" },
+    }));
+    assert.equal(publishPack.titles.length, 5);
+    assert.match(publishPack.layout, /发布前检查/);
+
+    const savedContent = parseJsonResult(await client.callTool({
+      name: "content_save_to_obsidian",
+      arguments: {
+        notePath: "03-工具库/content-test.md",
+        brief: contentBriefText,
+        draft: "这是一篇测试正文。",
+      },
+    }));
+    assert.equal(savedContent.path, "03-工具库/content-test.md");
+    assert.match(await fs.readFile(path.join(vaultRoot, "03-工具库", "content-test.md"), "utf8"), /写作 Brief/);
 
     const notes = parseJsonResult(await client.callTool({
       name: "obsidian_list_notes",
