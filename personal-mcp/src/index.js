@@ -168,16 +168,26 @@ function parseLarkInboxTasks(markdown, options = {}) {
   } = options;
   const content = String(markdown || "").replace(/\r\n/g, "\n");
   const headingRegex = /^###\s+(.+?)\s*$/gm;
-  const headings = [];
+  const taskStarts = [];
   let match;
   while ((match = headingRegex.exec(content))) {
-    headings.push({ title: match[1].trim(), start: match.index, bodyStart: headingRegex.lastIndex });
+    taskStarts.push({ title: match[1].trim(), start: match.index, bodyStart: headingRegex.lastIndex, heading: match[0] });
   }
+  const plainTaskRegex = /^(?!#{1,6}\s)([^\n:：]{1,80}?)\s*\n\s*(?=状态[:：]|任务[:：])/gm;
+  while ((match = plainTaskRegex.exec(content))) {
+    const title = match[1].trim();
+    if (title && !["说明", "任务", "结果", "状态", "优先级", "创建时间", "完成时间"].includes(title)) {
+      taskStarts.push({ title, start: match.index, bodyStart: plainTaskRegex.lastIndex, heading: match[0].trimEnd() });
+    }
+  }
+  taskStarts.sort((a, b) => a.start - b.start);
   const sectionStarts = [...content.matchAll(/^#{1,3}\s+.+?\s*$/gm)].map((item) => item.index);
   const tasks = [];
-  for (let index = 0; index < headings.length; index += 1) {
-    const current = headings[index];
-    const nextStart = sectionStarts.find((start) => start > current.start) ?? content.length;
+  for (let index = 0; index < taskStarts.length; index += 1) {
+    const current = taskStarts[index];
+    const nextTaskStart = taskStarts.find((item) => item.start > current.start)?.start;
+    const nextSectionStart = sectionStarts.find((start) => start > current.start);
+    const nextStart = Math.min(nextTaskStart ?? content.length, nextSectionStart ?? content.length);
     const block = content.slice(current.start, nextStart).trim();
     const body = content.slice(current.bodyStart, nextStart).trim();
     const statusMatch = body.match(/^状态[:：]\s*(.+?)\s*$/m);
@@ -231,7 +241,7 @@ ${block}
 function updateLarkInboxTask(markdown, title, result, options = {}) {
   const content = String(markdown || "").replace(/\r\n/g, "\n");
   const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`(^###\\s+${escapedTitle}\\s*$)([\\s\\S]*?)(?=^#{1,3}\\s+|\\s*$)`, "m");
+  const pattern = new RegExp(`(^###\\s+${escapedTitle}\\s*$|^\\s*${escapedTitle}\\s*$)([\\s\\S]*?)(?=^#{1,3}\\s+|^(?!#{1,6}\\s)[^\\n:：]{1,80}?\\s*\\n\\s*(?:状态[:：]|任务[:：])|\\s*$)`, "m");
   const match = content.match(pattern);
   if (!match) throw new Error(`Task not found in inbox: ${title}`);
   let body = match[2].trimEnd();

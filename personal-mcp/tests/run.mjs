@@ -167,6 +167,10 @@ async function main() {
 
 ## 待处理
 
+写公众号
+状态：待处理
+任务：帮我写一篇关于认知 AI 的公众号文章。
+
 ### 整理今天日报
 状态：待处理
 优先级：高
@@ -191,16 +195,18 @@ async function main() {
       name: "lark_inbox_parse_text",
       arguments: { markdown: inboxMarkdown, status: "待处理", limit: 10 },
     }));
-    assert.equal(pendingTasks.length, 1);
-    assert.equal(pendingTasks[0].title, "整理今天日报");
-    assert.equal(pendingTasks[0].priority, "高");
-    assert.match(pendingTasks[0].task, /读取 Obsidian/);
+    assert.equal(pendingTasks.length, 2);
+    assert.equal(pendingTasks[0].title, "写公众号");
+    assert.match(pendingTasks[0].task, /认知 AI/);
+    assert.equal(pendingTasks[1].title, "整理今天日报");
+    assert.equal(pendingTasks[1].priority, "高");
+    assert.match(pendingTasks[1].task, /读取 Obsidian/);
 
     const allInboxTasks = parseJsonResult(await client.callTool({
       name: "lark_inbox_parse_text",
       arguments: { markdown: inboxMarkdown, status: "", limit: 10 },
     }));
-    assert.equal(allInboxTasks.length, 2);
+    assert.equal(allInboxTasks.length, 3);
 
     const contentTask = "写一篇公众号，主题是 MCP 个人工作台，1500 字，教程型。";
     const contentTaskClass = parseJsonResult(await client.callTool({
