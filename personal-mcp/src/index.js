@@ -437,6 +437,165 @@ ${draft || "在这里粘贴正文初稿。"}
   return { titles, summary, layout };
 }
 
+function classifyTaskText(input) {
+  const textValue = String(input || "").trim();
+  const lower = textValue.toLowerCase();
+  const rules = [
+    {
+      type: "content",
+      label: "内容生成",
+      pattern: /(公众号|文章|小红书|知乎|视频脚本|文案|写一篇|标题|摘要|发布)/i,
+      tools: ["content_brief_parse", "content_research", "content_draft_pack", "content_publish_pack", "lark_inbox_complete_task"],
+      risk: "low",
+    },
+    {
+      type: "daily_report",
+      label: "日报复盘",
+      pattern: /(日报|日记|今日|今天.*总结|复盘|周报)/i,
+      tools: ["knowledge_search", "obsidian_read_note", "github_list_pull_requests", "lark_my_tasks", "knowledge_write_note", "lark_inbox_complete_task"],
+      risk: "medium",
+    },
+    {
+      type: "knowledge",
+      label: "知识检索",
+      pattern: /(知识库|搜索|查一下|查询|资料|总结.*文档|读取.*笔记|Obsidian|飞书文档|Google Drive)/i,
+      tools: ["knowledge_search", "knowledge_read", "knowledge_write_note", "lark_inbox_complete_task"],
+      risk: "low",
+    },
+    {
+      type: "code",
+      label: "代码任务",
+      pattern: /(代码|bug|修复|测试|提交|PR|pull request|GitHub|仓库|commit|push)/i,
+      tools: ["github_list_issues", "github_list_pull_requests", "github_create_pull_request"],
+      risk: /提交|push|创建PR|create pull request|删除|改/.test(textValue) ? "medium" : "low",
+    },
+    {
+      type: "data",
+      label: "数据分析",
+      pattern: /(SQLite|数据库|SQL|表格|数据|统计|分析|金额|支出|报表)/i,
+      tools: ["sqlite_list_databases", "sqlite_list_tables", "sqlite_query_readonly", "knowledge_write_note", "lark_inbox_complete_task"],
+      risk: "low",
+    },
+    {
+      type: "web_research",
+      label: "网页调研",
+      pattern: /(网页|官网|搜索互联网|调研|价格|最新|资料来源|链接|web|search)/i,
+      tools: ["web_search", "web_fetch", "knowledge_write_note", "lark_inbox_complete_task"],
+      risk: "low",
+    },
+  ];
+  const matched = rules.find((rule) => rule.pattern.test(textValue) || rule.pattern.test(lower));
+  if (matched) {
+    return {
+      type: matched.type,
+      label: matched.label,
+      confidence: 0.82,
+      risk: matched.risk,
+      recommendedTools: matched.tools,
+      reason: `Matched ${matched.label} keywords.`,
+    };
+  }
+  return {
+    type: "general",
+    label: "通用任务",
+    confidence: 0.45,
+    risk: "manual_review",
+    recommendedTools: ["knowledge_search", "knowledge_read", "lark_inbox_complete_task"],
+    reason: "No specific task pattern matched; needs manual review.",
+  };
+}
+
+function taskPlanFor(classification, task) {
+  const title = task?.title || "未命名任务";
+  const body = task?.task || String(task || "");
+  const commonLastStep = "用 lark_inbox_complete_task 将结果写回飞书 AI 指令收件箱。";
+  const plans = {
+    content: [
+      "用 content_brief_parse 解析写作主题、读者、风格、字数和约束。",
+      "用 content_research 从 Obsidian/知识库检索相关素材。",
+      "用 content_draft_pack 生成大纲、素材包和写作提示。",
+      "由当前 AI 根据写作提示生成正文。",
+      "用 content_publish_pack 生成标题备选、摘要、可发布排版和发布前检查。",
+      commonLastStep,
+    ],
+    knowledge: [
+      "用 knowledge_search 搜索本地 Obsidian；必要时 includeNetwork=true 扩展到飞书/Google Drive/网页。",
+      "用 knowledge_read 精读关键结果。",
+      "汇总答案，必要时用 knowledge_write_note 写回 Obsidian。",
+      commonLastStep,
+    ],
+    daily_report: [
+      "读取当天 Obsidian 日记或相关知识库记录。",
+      "视需要查询 GitHub PR、飞书任务和日程。",
+      "整理完成事项、问题、原因、解决方案和明日计划。",
+      "写回 Obsidian 日报/复盘位置。",
+      commonLastStep,
+    ],
+    code: [
+      "读取仓库状态和相关 issue/PR。",
+      "生成修改计划并运行测试。",
+      "如涉及提交、推送或 PR，先确认范围和风险。",
+      "完成后汇总代码变更、测试结果和 PR 链接。",
+      commonLastStep,
+    ],
+    data: [
+      "用 sqlite_list_databases 定位数据库。",
+      "用 sqlite_list_tables 和 sqlite_describe_table 查看结构。",
+      "用 sqlite_query_readonly 执行只读 SELECT/WITH 分析。",
+      "生成结论和必要图表/表格说明。",
+      commonLastStep,
+    ],
+    web_research: [
+      "用 web_search 找候选来源。",
+      "优先读取官方/权威页面。",
+      "用 web_fetch 抽取正文并交叉核验。",
+      "总结结论、来源链接和不确定性。",
+      commonLastStep,
+    ],
+    general: [
+      "人工阅读任务，确认目标和风险。",
+      "优先用 knowledge_search 查已有资料。",
+      "按任务内容选择合适 MCP 工具。",
+      "执行前对写入、提交、删除、公开分享等动作再次确认。",
+      commonLastStep,
+    ],
+  };
+  return {
+    title,
+    task: body,
+    classification,
+    dryRun: true,
+    executionMode: "semi_auto",
+    steps: plans[classification.type] || plans.general,
+    requiresConfirmation: ["medium", "high", "manual_review"].includes(classification.risk),
+  };
+}
+
+function taskResultTemplate(task, classification) {
+  return `## 执行结果
+
+任务：${task?.title || "未命名任务"}
+类型：${classification.label}
+风险级别：${classification.risk}
+
+### 结果摘要
+
+- 
+
+### 执行过程
+
+1. 
+
+### 产出链接 / 文件
+
+- 
+
+### 后续建议
+
+- 
+`;
+}
+
 async function walkSqliteDatabases(dir, options = {}) {
   const { maxFiles = 200 } = options;
   const files = [];
@@ -1625,6 +1784,71 @@ ${JSON.stringify(parsed, null, 2)}
       path: path.relative(vaultRoot, file),
       title: pack.titles[0],
       bytes: Buffer.byteLength(body),
+    });
+  },
+);
+
+server.tool(
+  "task_classify",
+  "Classify a task into a semi-automated workflow type.",
+  {
+    task: z.string().min(1),
+  },
+  async ({ task }) => json(classifyTaskText(task)),
+);
+
+server.tool(
+  "task_plan",
+  "Create a dry-run execution plan for a task. This does not execute the task.",
+  {
+    title: z.string().default("未命名任务"),
+    task: z.string().min(1),
+  },
+  async ({ title, task }) => {
+    const classification = classifyTaskText(`${title}\n${task}`);
+    return json(taskPlanFor(classification, { title, task }));
+  },
+);
+
+server.tool(
+  "task_result_template",
+  "Create a standard result template for a task classification.",
+  {
+    title: z.string().default("未命名任务"),
+    task: z.string().min(1),
+  },
+  async ({ title, task }) => {
+    const classification = classifyTaskText(`${title}\n${task}`);
+    return text(taskResultTemplate({ title, task }, classification));
+  },
+);
+
+server.tool(
+  "task_dispatch_pending",
+  "Fetch pending Feishu AI inbox tasks and return semi-automatic dispatch plans. Does not execute tasks.",
+  {
+    doc: z.string().describe("Feishu AI instruction inbox document URL or token."),
+    limit: z.number().int().min(1).max(50).default(10),
+    status: z.string().default("待处理"),
+  },
+  async ({ doc, limit, status }) => {
+    const markdown = await larkFetchMarkdown(doc);
+    const tasks = parseLarkInboxTasks(markdown, { status, limit });
+    const dispatches = tasks.map((task) => {
+      const classification = classifyTaskText(`${task.title}\n${task.task}`);
+      return {
+        task,
+        plan: taskPlanFor(classification, task),
+        resultTemplate: taskResultTemplate(task, classification),
+      };
+    });
+    return json({
+      doc,
+      status,
+      mode: "semi_auto",
+      note: "This tool only classifies and plans. The current AI must execute the recommended tools and write results back.",
+      count: dispatches.length,
+      dispatches,
     });
   },
 );

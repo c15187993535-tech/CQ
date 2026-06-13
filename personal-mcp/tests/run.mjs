@@ -145,10 +145,14 @@ async function main() {
       "content_draft_pack",
       "content_publish_pack",
       "content_save_to_obsidian",
+      "task_classify",
+      "task_plan",
+      "task_result_template",
+      "task_dispatch_pending",
     ]) {
       assert.ok(toolNames.includes(expected), `missing MCP tool: ${expected}`);
     }
-    assert.equal(toolNames.length, 42, "unexpected registered MCP tool count");
+    assert.equal(toolNames.length, 46, "unexpected registered MCP tool count");
 
     const inboxTemplate = textResult(await client.callTool({ name: "lark_inbox_template", arguments: {} }));
     assert.match(inboxTemplate, /# AI 指令收件箱/);
@@ -192,6 +196,37 @@ async function main() {
       arguments: { markdown: inboxMarkdown, status: "", limit: 10 },
     }));
     assert.equal(allInboxTasks.length, 2);
+
+    const contentTask = "写一篇公众号，主题是 MCP 个人工作台，1500 字，教程型。";
+    const contentTaskClass = parseJsonResult(await client.callTool({
+      name: "task_classify",
+      arguments: { task: contentTask },
+    }));
+    assert.equal(contentTaskClass.type, "content");
+    assert.ok(contentTaskClass.recommendedTools.includes("content_brief_parse"));
+
+    const contentTaskPlan = parseJsonResult(await client.callTool({
+      name: "task_plan",
+      arguments: { title: "写公众号：MCP 个人工作台", task: contentTask },
+    }));
+    assert.equal(contentTaskPlan.executionMode, "semi_auto");
+    assert.equal(contentTaskPlan.classification.type, "content");
+    assert.equal(contentTaskPlan.requiresConfirmation, false);
+    assert.ok(contentTaskPlan.steps.some((step) => step.includes("content_draft_pack")));
+
+    const reportTaskPlan = parseJsonResult(await client.callTool({
+      name: "task_plan",
+      arguments: { title: "整理日报", task: "读取今天 Obsidian 日记，结合 GitHub PR 和飞书任务生成日报。" },
+    }));
+    assert.equal(reportTaskPlan.classification.type, "daily_report");
+    assert.equal(reportTaskPlan.requiresConfirmation, true);
+
+    const taskTemplate = textResult(await client.callTool({
+      name: "task_result_template",
+      arguments: { title: "写公众号：MCP 个人工作台", task: contentTask },
+    }));
+    assert.match(taskTemplate, /执行结果/);
+    assert.match(taskTemplate, /内容生成/);
 
     const knowledgeSources = parseJsonResult(await client.callTool({ name: "knowledge_sources", arguments: {} }));
     assert.ok(knowledgeSources.some((source) => source.source === "obsidian" && source.capabilities.includes("write")));

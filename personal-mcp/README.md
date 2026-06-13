@@ -11,6 +11,7 @@ This MCP server wraps the personal integrations that have already been verified 
 - SQLite readonly database inspection/query tools
 - Unified knowledge tools across Obsidian plus optional network-backed sources
 - Content generation workflow tools for WeChat Official Account-style articles
+- Semi-automatic task dispatch tools for Feishu inbox tasks
 - One-shot health checks across the configured integrations
 
 ## Run
@@ -181,6 +182,21 @@ Recommended mobile flow:
 -> AI writes the article
 -> content_publish_pack
 -> lark_inbox_complete_task writes the result back to phone
+```
+
+## Semi-automatic task dispatch
+
+These tools do not run on a timer and do not execute tasks by themselves. They classify pending tasks and produce a safe dry-run plan for the current AI session.
+
+- `task_classify`: classify a task as content, knowledge, daily_report, code, data, web_research, or general.
+- `task_plan`: create a semi-automatic execution plan and recommended tools.
+- `task_result_template`: generate a standard result block for writing back to Feishu.
+- `task_dispatch_pending`: read pending Feishu AI inbox tasks and return dispatch plans.
+
+Recommended command:
+
+```text
+读取飞书 AI 指令收件箱，调用 task_dispatch_pending，然后按计划执行待处理任务。
 ```
 
 ## Web tools

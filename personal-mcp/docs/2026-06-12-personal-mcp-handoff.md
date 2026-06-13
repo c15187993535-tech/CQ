@@ -16,6 +16,7 @@
 | Google Drive / Docs / Sheets | 已跑通 | 使用本地 OAuth 文件查询账号、搜索 Drive、读取 Docs / Sheets |
 | 统一知识库 MCP | 已跑通 | 统一搜索/读取/写入 Obsidian，并可选接入飞书、Google Drive、网页 |
 | 内容生成 MCP | 已跑通 | 面向公众号/长文写作，支持 brief 解析、素材检索、大纲、发布包和 Obsidian 保存 |
+| 半自动任务调度 MCP | 已跑通 | 不定时、不后台执行；读取待处理任务后分类、生成计划和结果模板 |
 | 网页搜索 / 网页读取 | 已跑通 | `web_search` 免费走 Bing RSS；可选 Brave Search；`web_fetch` 抓取网页正文 |
 | SQLite 只读数据库 | 已跑通 | 仅允许访问白名单目录内的 `.db` / `.sqlite` / `.sqlite3`，只支持 `SELECT` / `WITH` 查询 |
 | 健康检查 | 已跑通 | `mcp_health_check` 一键检查整套集成 |
@@ -188,7 +189,7 @@ https://my.feishu.cn/docx/EkRedV11koOJbrxooz9cACasnPe
 lark_inbox_fetch_pending -> 成功读取“示例任务”
 lark_inbox_add_task -> 成功追加“MCP 写回验证”
 lark_inbox_complete_task -> 成功写入结果并标记已完成
-tools_count=42
+tools_count=46
 ```
 
 手机使用方式：
@@ -284,6 +285,49 @@ content_publish_pack -> 生成 5 个标题、摘要、发布排版和检查清�
 content_save_to_obsidian -> 成功写入 03-工具库/content-test.md
 ```
 
+### 半自动任务调度 MCP
+
+本轮新增半自动调度工具。它不是定时器，也不会后台自动执行任务；它只负责在当前 AI 会话中读取待处理任务、分类、生成推荐工具和执行计划。
+
+新增工具：
+
+```text
+task_classify
+task_plan
+task_result_template
+task_dispatch_pending
+```
+
+调度类型：
+
+```text
+content -> 内容生成 / 公众号写作
+knowledge -> 知识检索 / 文档总结
+daily_report -> 日报 / 复盘
+code -> 代码 / PR / GitHub
+data -> SQLite / 数据分析
+web_research -> 网页调研
+general -> 通用任务，需人工判断
+```
+
+安全策略：
+
+```text
+task_dispatch_pending 只 dry-run，不执行任务
+medium / manual_review 风险会标记 requiresConfirmation=true
+真正执行仍由当前 AI 按计划调用现有 MCP 工具
+执行结果再用 lark_inbox_complete_task 写回飞书
+```
+
+已验证：
+
+```text
+task_classify("写公众号...") -> content
+task_plan("写公众号...") -> 推荐 content_* 工具，无需额外确认
+task_plan("整理日报...") -> daily_report，需要确认
+task_result_template -> 生成标准结果模板
+```
+
 ### SQLite
 
 数据库白名单目录：
@@ -307,7 +351,7 @@ content_save_to_obsidian -> 成功写入 03-工具库/content-test.md
 
 ## 5. MCP 工具清单
 
-当前 `personal_mcp` 一共注册 42 个工具：
+当前 `personal_mcp` 一共注册 46 个工具：
 
 ```text
 obsidian_list_notes
@@ -348,6 +392,10 @@ content_outline
 content_draft_pack
 content_publish_pack
 content_save_to_obsidian
+task_classify
+task_plan
+task_result_template
+task_dispatch_pending
 sqlite_list_databases
 sqlite_list_tables
 sqlite_describe_table
@@ -391,10 +439,11 @@ npm audit --omit=dev --audit-level=moderate
 覆盖内容：
 
 ```text
-MCP 工具注册数量 = 42
+MCP 工具注册数量 = 46
 飞书 AI 指令收件箱模板/解析工具
 统一知识库 MCP 搜索/读取/写入/路径保护
 内容生成 MCP brief/素材/大纲/发布包/保存
+半自动任务调度 MCP 分类/计划/结果模板
 Obsidian 读/写/路径越权拦截
 SQLite 列库/列表/字段结构/聚合查询
 SQLite DELETE、多语句、越权路径拦截
@@ -546,7 +595,7 @@ lark_inbox_complete_task
 验证结果：
 
 ```text
-tools_count=42
+tools_count=46
 lark_inbox_fetch_pending -> 读取到示例任务
 lark_inbox_add_task -> revision_id=5
 lark_inbox_complete_task -> revision_id=7
@@ -568,7 +617,7 @@ knowledge_write_note
 验证结果：
 
 ```text
-tools_count=42
+tools_count=46
 knowledge_sources -> ok
 knowledge_search(query="Knowledge MCP", sources="obsidian,web", includeNetwork=false) -> 返回 Obsidian 结果并跳过 web
 knowledge_read(source="obsidian") -> 成功读取测试笔记
@@ -592,13 +641,34 @@ content_save_to_obsidian
 验证结果：
 
 ```text
-tools_count=42
+tools_count=46
 content_brief_parse -> topic=MCP 个人工作台
 content_research -> 返回 Obsidian 素材，web 因 includeNetwork=false 被跳过
 content_outline -> 生成 7 段式公众号大纲
 content_draft_pack -> 生成初稿写作提示
 content_publish_pack -> 生成 5 个标题和发布前检查
 content_save_to_obsidian -> 写入 03-工具库/content-test.md
+```
+
+## 6.6 半自动任务调度 MCP 验证
+
+新增 MCP 工具：
+
+```text
+task_classify
+task_plan
+task_result_template
+task_dispatch_pending
+```
+
+验证结果：
+
+```text
+tools_count=46
+task_classify("写一篇公众号...") -> content
+task_plan("写公众号：MCP 个人工作台") -> semi_auto，推荐 content_draft_pack
+task_plan("整理日报") -> daily_report，requiresConfirmation=true
+task_result_template -> 生成标准执行结果模板
 ```
 
 ## 7. HTTP JSON 稳定性优化
@@ -797,12 +867,13 @@ GitHub fallbackAvailable=true
 最后一次端到端验证通过：
 
 ```text
-TOOLS_COUNT=42
+TOOLS_COUNT=46
 SQLite tools=ok
 Lark inbox tools=ok
 Lark inbox writeback=ok
 Knowledge tools=ok
 Content tools=ok
+Task dispatch tools=ok
 npm test=passed
 npm audit=0 vulnerabilities
 mcp_health_check=status ok
