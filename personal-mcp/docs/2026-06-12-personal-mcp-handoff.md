@@ -189,7 +189,7 @@ https://my.feishu.cn/docx/EkRedV11koOJbrxooz9cACasnPe
 lark_inbox_fetch_pending -> 成功读取“示例任务”
 lark_inbox_add_task -> 成功追加“MCP 写回验证”
 lark_inbox_complete_task -> 成功写入结果并标记已完成
-tools_count=46
+tools_count=46（当时；当前工具总数见第 5 节）
 ```
 
 手机使用方式：
@@ -351,7 +351,7 @@ task_result_template -> 生成标准结果模板
 
 ## 5. MCP 工具清单
 
-当前 `personal_mcp` 一共注册 46 个工具：
+当前 `personal_mcp` 一共注册 51 个工具：
 
 ```text
 obsidian_list_notes
@@ -377,6 +377,11 @@ lark_inbox_complete_task
 web_search
 web_fetch
 mcp_health_check
+mcp_health_local
+mcp_health_github
+mcp_health_lark
+mcp_health_google
+mcp_health_web
 google_auth_status
 google_profile
 google_drive_search
@@ -439,7 +444,7 @@ npm audit --omit=dev --audit-level=moderate
 覆盖内容：
 
 ```text
-MCP 工具注册数量 = 46
+MCP 工具注册数量 = 51
 飞书 AI 指令收件箱模板/解析工具
 统一知识库 MCP 搜索/读取/写入/路径保护
 内容生成 MCP brief/素材/大纲/发布包/保存
@@ -449,6 +454,7 @@ SQLite 列库/列表/字段结构/聚合查询
 SQLite DELETE、多语句、越权路径拦截
 Google 本地 OAuth 文件状态
 mcp_health_check(includeNetwork=false)
+mcp_health_local
 Git 跟踪文件中的常见密钥模式扫描
 ```
 
@@ -479,6 +485,32 @@ mcp_health_check({ "includeNetwork": true })
 - 飞书认证
 - Google Drive API
 - 网页搜索
+
+### 分项健康检查
+
+为避免 `mcp_health_check(includeNetwork=true)` 被单个外部服务拖慢或超时，本轮新增 5 个分项健康检查工具：
+
+```text
+mcp_health_local  -> Obsidian / Google OAuth 文件 / 搜索配置 / SQLite
+mcp_health_github -> GitHub token 与 API
+mcp_health_lark   -> 飞书 user / bot 认证
+mcp_health_google -> Google OAuth 文件与 Google Drive API
+mcp_health_web    -> 搜索配置与 live web search
+```
+
+建议排障顺序：
+
+1. 先跑 `mcp_health_local`，确认本地配置没有坏。
+2. 再按需要分别跑 `mcp_health_github`、`mcp_health_lark`、`mcp_health_google`、`mcp_health_web`。
+3. 只有需要端到端总览时，再跑 `mcp_health_check({ "includeNetwork": true })`。
+
+本轮实测结果：
+
+```text
+mcp_health_local=status ok
+mcp_health_lark=status ok
+GitHub / Google / Web 在当前 Codex 沙箱内表现为 DNS 受限；分项工具能清楚显示具体失败项。
+```
 
 ### 网页搜索验证
 
@@ -595,7 +627,7 @@ lark_inbox_complete_task
 验证结果：
 
 ```text
-tools_count=46
+tools_count=46（当时；当前工具总数见第 5 节）
 lark_inbox_fetch_pending -> 读取到示例任务
 lark_inbox_add_task -> revision_id=5
 lark_inbox_complete_task -> revision_id=7
@@ -617,7 +649,7 @@ knowledge_write_note
 验证结果：
 
 ```text
-tools_count=46
+tools_count=46（当时；当前工具总数见第 5 节）
 knowledge_sources -> ok
 knowledge_search(query="Knowledge MCP", sources="obsidian,web", includeNetwork=false) -> 返回 Obsidian 结果并跳过 web
 knowledge_read(source="obsidian") -> 成功读取测试笔记
@@ -641,7 +673,7 @@ content_save_to_obsidian
 验证结果：
 
 ```text
-tools_count=46
+tools_count=46（当时；当前工具总数见第 5 节）
 content_brief_parse -> topic=MCP 个人工作台
 content_research -> 返回 Obsidian 素材，web 因 includeNetwork=false 被跳过
 content_outline -> 生成 7 段式公众号大纲
@@ -664,7 +696,7 @@ task_dispatch_pending
 验证结果：
 
 ```text
-tools_count=46
+tools_count=46（当时；当前工具总数见第 5 节）
 task_classify("写一篇公众号...") -> content
 task_plan("写公众号：MCP 个人工作台") -> semi_auto，推荐 content_draft_pack
 task_plan("整理日报") -> daily_report，requiresConfirmation=true
@@ -845,7 +877,7 @@ Claude JSON 配置可解析
 配置文件脱敏扫描未发现明文 ANTHROPIC_AUTH_TOKEN
 shell 环境变量 ANTHROPIC_AUTH_TOKEN=present
 npm run check 通过
-mcp_health_check status=ok
+mcp_health_check status=ok（当时全链路结果；当前优先跑分项健康检查）
 GitHub fallbackAvailable=true
 ```
 
@@ -867,7 +899,7 @@ GitHub fallbackAvailable=true
 最后一次端到端验证通过：
 
 ```text
-TOOLS_COUNT=46
+TOOLS_COUNT=51
 SQLite tools=ok
 Lark inbox tools=ok
 Lark inbox writeback=ok
@@ -875,12 +907,12 @@ Knowledge tools=ok
 Content tools=ok
 Task dispatch tools=ok
 npm test=passed
-npm audit=0 vulnerabilities
-mcp_health_check=status ok
-github=ok
+npm audit=前次 0 vulnerabilities；本轮未改依赖，沙箱 DNS 限制导致未能复跑
+mcp_health_local=status ok
 lark=ok
-google_drive=ok
-web_search=ok
+github=sandbox DNS restricted during latest Codex run
+google_drive=sandbox DNS restricted during latest Codex run
+web_search=sandbox DNS restricted during latest Codex run
 ```
 
 这份文档可作为后续 AI 接手的起点。

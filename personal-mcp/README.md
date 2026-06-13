@@ -242,5 +242,11 @@ Safety limits:
 ## Health check
 
 - `mcp_health_check`: verifies Obsidian, Google OAuth files, search config, SQLite roots, and optionally GitHub, Lark, Google Drive, and web search.
+- `mcp_health_local`: fast local checks for Obsidian, Google OAuth files, search config, and SQLite roots.
+- `mcp_health_github`: GitHub token/API check only.
+- `mcp_health_lark`: Lark/Feishu auth check only.
+- `mcp_health_google`: Google OAuth files plus Google Drive API check only.
+- `mcp_health_web`: search config plus live web-search check only.
 
 Use `includeNetwork: false` for a fast local-only check, or `includeNetwork: true` for end-to-end validation.
+When diagnosing failures, prefer the split tools first so one slow network provider does not hide the rest of the system.

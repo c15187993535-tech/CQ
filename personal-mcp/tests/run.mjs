@@ -122,6 +122,11 @@ async function main() {
     const toolNames = tools.tools.map((tool) => tool.name).sort();
     for (const expected of [
       "mcp_health_check",
+      "mcp_health_local",
+      "mcp_health_github",
+      "mcp_health_lark",
+      "mcp_health_google",
+      "mcp_health_web",
       "obsidian_read_note",
       "obsidian_write_note",
       "sqlite_list_databases",
@@ -152,7 +157,7 @@ async function main() {
     ]) {
       assert.ok(toolNames.includes(expected), `missing MCP tool: ${expected}`);
     }
-    assert.equal(toolNames.length, 46, "unexpected registered MCP tool count");
+    assert.equal(toolNames.length, 51, "unexpected registered MCP tool count");
 
     const inboxTemplate = textResult(await client.callTool({ name: "lark_inbox_template", arguments: {} }));
     assert.match(inboxTemplate, /# AI 指令收件箱/);
@@ -373,6 +378,13 @@ async function main() {
     }));
     assert.equal(health.status, "ok");
     assert.equal(health.checks.find((check) => check.name === "sqlite_config")?.databaseCount, 1);
+
+    const localHealth = parseJsonResult(await client.callTool({
+      name: "mcp_health_local",
+      arguments: {},
+    }));
+    assert.equal(localHealth.status, "ok");
+    assert.equal(localHealth.checks.find((check) => check.name === "sqlite_config")?.databaseCount, 1);
   } finally {
     await client.close();
     await fs.rm(tempRoot, { recursive: true, force: true });

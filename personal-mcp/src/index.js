@@ -1078,6 +1078,105 @@ function summarizeHealth(checks) {
   return "ok";
 }
 
+function healthPayload(checks) {
+  return {
+    status: summarizeHealth(checks),
+    checkedAt: new Date().toISOString(),
+    checks,
+  };
+}
+
+async function probeObsidianHealth() {
+  await fs.access(vaultRoot);
+  const notes = await walkMarkdown(vaultRoot, { maxFiles: 3 });
+  return {
+    status: notes.length ? "ok" : "warn",
+    vaultRoot,
+    sampleNotes: notes.map((file) => path.relative(vaultRoot, file)),
+  };
+}
+
+async function probeGoogleOAuthFilesHealth() {
+  const token = await loadGoogleToken();
+  await fs.access(googleCredentialsPath);
+  return {
+    status: token.refresh_token ? "ok" : "warn",
+    credentialsPath: googleCredentialsPath,
+    tokenPath: googleTokenPath,
+    hasRefreshToken: Boolean(token.refresh_token),
+    expiresAt: token.expires_at ? new Date(token.expires_at).toISOString() : null,
+  };
+}
+
+async function probeSearchConfigHealth() {
+  return {
+    status: "ok",
+    braveConfigured: Boolean(braveSearchApiKey),
+    fallback: "bing-rss",
+    proxy: webProxy || null,
+  };
+}
+
+async function probeSqliteConfigHealth() {
+  const roots = [];
+  let databaseCount = 0;
+  for (const root of sqliteRoots) {
+    let exists = false;
+    try {
+      const stat = await fs.stat(root);
+      exists = stat.isDirectory();
+    } catch {}
+    if (exists) {
+      const databases = await walkSqliteDatabases(root, { maxFiles: 20 });
+      databaseCount += databases.length;
+    }
+    roots.push({ root, exists });
+  }
+  return { status: "ok", roots, databaseCount };
+}
+
+async function probeGithubHealth() {
+  const user = await githubRequest("/user");
+  return {
+    status: "ok",
+    login: user.login,
+    tokenSource: user.__tokenSource || "unknown",
+    fallbackAvailable: (await githubTokenCandidates()).some((candidate) => candidate.source === "gh auth token"),
+  };
+}
+
+async function probeLarkHealth() {
+  const result = await runCommand("lark-cli", ["auth", "status"], { timeoutMs: 20_000 });
+  const parsed = JSON.parse(result.stdout);
+  const userStatus = parsed.identities?.user?.status;
+  return {
+    status: ["ready", "needs_refresh"].includes(userStatus) ? "ok" : "warn",
+    userStatus,
+    userName: parsed.identities?.user?.userName,
+    botStatus: parsed.identities?.bot?.status,
+  };
+}
+
+async function probeGoogleDriveHealth() {
+  const profile = await googleRequest("https://www.googleapis.com/drive/v3/about?fields=user");
+  return {
+    status: "ok",
+    displayName: profile.user?.displayName,
+    emailAddress: profile.user?.emailAddress,
+  };
+}
+
+async function probeWebSearchHealth() {
+  const search = await webSearch("\"Model Context Protocol\"", { limit: 3, market: "en-US", backend: "auto" });
+  return {
+    status: search.results.length ? "ok" : "warn",
+    backend: search.backend,
+    results: search.results.length,
+    braveConfigured: Boolean(braveSearchApiKey),
+    attempts: search.attempts,
+  };
+}
+
 async function googleAccessToken() {
   const credentials = await loadGoogleCredentials();
   let token = await loadGoogleToken();
@@ -1973,102 +2072,80 @@ server.tool(
   },
   async ({ includeNetwork }) => {
     const checks = [];
-    checks.push(await runHealthProbe("obsidian", async () => {
-      await fs.access(vaultRoot);
-      const notes = await walkMarkdown(vaultRoot, { maxFiles: 3 });
-      return {
-        status: notes.length ? "ok" : "warn",
-        vaultRoot,
-        sampleNotes: notes.map((file) => path.relative(vaultRoot, file)),
-      };
-    }));
-
-    checks.push(await runHealthProbe("google_oauth_files", async () => {
-      const token = await loadGoogleToken();
-      await fs.access(googleCredentialsPath);
-      return {
-        status: token.refresh_token ? "ok" : "warn",
-        credentialsPath: googleCredentialsPath,
-        tokenPath: googleTokenPath,
-        hasRefreshToken: Boolean(token.refresh_token),
-        expiresAt: token.expires_at ? new Date(token.expires_at).toISOString() : null,
-      };
-    }));
-
-    checks.push(await runHealthProbe("search_config", async () => ({
-      status: "ok",
-      braveConfigured: Boolean(braveSearchApiKey),
-      fallback: "bing-rss",
-      proxy: webProxy || null,
-    })));
-
-    checks.push(await runHealthProbe("sqlite_config", async () => {
-      const roots = [];
-      let databaseCount = 0;
-      for (const root of sqliteRoots) {
-        let exists = false;
-        try {
-          const stat = await fs.stat(root);
-          exists = stat.isDirectory();
-        } catch {}
-        if (exists) {
-          const databases = await walkSqliteDatabases(root, { maxFiles: 20 });
-          databaseCount += databases.length;
-        }
-        roots.push({ root, exists });
-      }
-      return { status: "ok", roots, databaseCount };
-    }));
+    checks.push(await runHealthProbe("obsidian", probeObsidianHealth));
+    checks.push(await runHealthProbe("google_oauth_files", probeGoogleOAuthFilesHealth));
+    checks.push(await runHealthProbe("search_config", probeSearchConfigHealth));
+    checks.push(await runHealthProbe("sqlite_config", probeSqliteConfigHealth));
 
     if (includeNetwork) {
-      checks.push(await runHealthProbe("github", async () => {
-        const user = await githubRequest("/user");
-        return {
-          status: "ok",
-          login: user.login,
-          tokenSource: user.__tokenSource || "unknown",
-          fallbackAvailable: (await githubTokenCandidates()).some((candidate) => candidate.source === "gh auth token"),
-        };
-      }));
-
-      checks.push(await runHealthProbe("lark", async () => {
-        const result = await runCommand("lark-cli", ["auth", "status"], { timeoutMs: 20_000 });
-        const parsed = JSON.parse(result.stdout);
-        const userStatus = parsed.identities?.user?.status;
-        return {
-          status: ["ready", "needs_refresh"].includes(userStatus) ? "ok" : "warn",
-          userStatus,
-          userName: parsed.identities?.user?.userName,
-          botStatus: parsed.identities?.bot?.status,
-        };
-      }));
-
-      checks.push(await runHealthProbe("google_drive", async () => {
-        const profile = await googleRequest("https://www.googleapis.com/drive/v3/about?fields=user");
-        return {
-          status: "ok",
-          displayName: profile.user?.displayName,
-          emailAddress: profile.user?.emailAddress,
-        };
-      }));
-
-      checks.push(await runHealthProbe("web_search", async () => {
-        const search = await webSearch("\"Model Context Protocol\"", { limit: 3, market: "en-US", backend: "auto" });
-        return {
-          status: search.results.length ? "ok" : "warn",
-          backend: search.backend,
-          results: search.results.length,
-          braveConfigured: Boolean(braveSearchApiKey),
-          attempts: search.attempts,
-        };
-      }));
+      checks.push(await runHealthProbe("github", probeGithubHealth));
+      checks.push(await runHealthProbe("lark", probeLarkHealth));
+      checks.push(await runHealthProbe("google_drive", probeGoogleDriveHealth));
+      checks.push(await runHealthProbe("web_search", probeWebSearchHealth));
     }
 
-    return json({
-      status: summarizeHealth(checks),
-      checkedAt: new Date().toISOString(),
-      checks,
-    });
+    return json(healthPayload(checks));
+  },
+);
+
+server.tool(
+  "mcp_health_local",
+  "Run local-only health checks for files, OAuth token files, search config, and SQLite roots.",
+  {},
+  async () => {
+    const checks = [
+      await runHealthProbe("obsidian", probeObsidianHealth),
+      await runHealthProbe("google_oauth_files", probeGoogleOAuthFilesHealth),
+      await runHealthProbe("search_config", probeSearchConfigHealth),
+      await runHealthProbe("sqlite_config", probeSqliteConfigHealth),
+    ];
+    return json(healthPayload(checks));
+  },
+);
+
+server.tool(
+  "mcp_health_github",
+  "Run the GitHub MCP health check only.",
+  {},
+  async () => {
+    const checks = [await runHealthProbe("github", probeGithubHealth)];
+    return json(healthPayload(checks));
+  },
+);
+
+server.tool(
+  "mcp_health_lark",
+  "Run the Lark/Feishu auth health check only.",
+  {},
+  async () => {
+    const checks = [await runHealthProbe("lark", probeLarkHealth)];
+    return json(healthPayload(checks));
+  },
+);
+
+server.tool(
+  "mcp_health_google",
+  "Run Google OAuth file and Drive API health checks only.",
+  {},
+  async () => {
+    const checks = [
+      await runHealthProbe("google_oauth_files", probeGoogleOAuthFilesHealth),
+      await runHealthProbe("google_drive", probeGoogleDriveHealth),
+    ];
+    return json(healthPayload(checks));
+  },
+);
+
+server.tool(
+  "mcp_health_web",
+  "Run web search configuration and live search health checks only.",
+  {},
+  async () => {
+    const checks = [
+      await runHealthProbe("search_config", probeSearchConfigHealth),
+      await runHealthProbe("web_search", probeWebSearchHealth),
+    ];
+    return json(healthPayload(checks));
   },
 );
 
