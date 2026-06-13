@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const projectRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outboxRoot = path.resolve(process.env.PERSONAL_MCP_OUTBOX || path.join(projectRoot, "outbox"));
 const vaultRoot = path.resolve(process.env.OBSIDIAN_VAULT_PATH || "/Users/mac/Desktop/知识库");
 
