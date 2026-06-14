@@ -137,6 +137,7 @@ async function main() {
       "web_fetch",
       "lark_inbox_template",
       "lark_inbox_parse_text",
+      "lark_inbox_audit",
       "lark_inbox_fetch_pending",
       "lark_inbox_add_task",
       "lark_inbox_complete_task",
@@ -157,7 +158,7 @@ async function main() {
     ]) {
       assert.ok(toolNames.includes(expected), `missing MCP tool: ${expected}`);
     }
-    assert.equal(toolNames.length, 51, "unexpected registered MCP tool count");
+    assert.equal(toolNames.length, 52, "unexpected registered MCP tool count");
 
     const inboxTemplate = textResult(await client.callTool({ name: "lark_inbox_template", arguments: {} }));
     assert.match(inboxTemplate, /# AI 指令收件箱/);
@@ -181,6 +182,12 @@ async function main() {
 任务：
 读取 Obsidian 今日笔记，生成日报。
 
+## 已完成归档
+
+[打开 AI 指令完成归档](https://example.feishu.cn/docx/archive)
+
+## 已完成
+
 ### 已完成示例
 状态：已完成
 优先级：低
@@ -192,11 +199,16 @@ async function main() {
 
 完成时间：2026-06-12 20:10:00
 
-## 已完成
+## 示例区（不要执行）
+
+### 简单任务示例
+状态：示例
+资料来源：Obsidian + 飞书 + 联网
+任务：结合我的知识库写文章。
 `;
     const pendingTasks = parseJsonResult(await client.callTool({
       name: "lark_inbox_parse_text",
-      arguments: { markdown: inboxMarkdown, status: "待处理", limit: 10 },
+      arguments: { markdown: inboxMarkdown, status: "待处理", section: "待处理", limit: 10 },
     }));
     assert.equal(pendingTasks.length, 2);
     assert.equal(pendingTasks[0].title, "写公众号");
@@ -211,7 +223,13 @@ async function main() {
       name: "lark_inbox_parse_text",
       arguments: { markdown: inboxMarkdown, status: "", limit: 10 },
     }));
-    assert.equal(allInboxTasks.length, 3);
+    assert.equal(allInboxTasks.length, 4);
+
+    const inboxAudit = parseJsonResult(await client.callTool({
+      name: "lark_inbox_parse_text",
+      arguments: { markdown: inboxMarkdown, status: "待处理", section: "示例区（不要执行）", limit: 10 },
+    }));
+    assert.equal(inboxAudit.length, 0);
 
     const contentTask = "写一篇公众号，主题是 MCP 个人工作台，1500 字，教程型。";
     const contentTaskClass = parseJsonResult(await client.callTool({

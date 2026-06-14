@@ -144,30 +144,62 @@ function nowLocalIso() {
 function larkInboxTemplate() {
   return `# AI 指令收件箱
 
-说明：
-手机上把任务写到“待处理”下面。
-Mac 上让 AI 读取本文档并执行。
-AI 执行后，把状态改为“已完成”，并写入结果。
+> 手机把任务写到「待处理」下面；Mac 上让 AI 读取并执行。完成结果不堆在这里，统一写入「AI 指令完成归档」。
+
+## 手机填写区
+
+最短只写四行：
+
+任务标题
+状态：待处理
+资料来源：Obsidian + 飞书 / 联网 / 不联网
+任务：一句话说明你要 AI 做什么
+
+可选字段：
+
+优先级：高 / 中 / 低
+截止时间：今天 18:00
+补充：资料、链接、格式要求
 
 ## 待处理
 
-### 示例任务
-状态：待处理
-优先级：中
-资料来源：Obsidian + 飞书
-任务：
-读取今天 Obsidian 日记，生成日报，写入 Obsidian，并同步到飞书。
+把新任务写在这里。
 
-## 已完成
+## 已完成归档
+
+填入 AI 指令完成归档链接。
+
+## 示例区（不要执行）
+
+### 简单任务示例
+状态：示例
+资料来源：Obsidian + 飞书 + 联网
+优先级：中
+任务：结合我的知识库和最新资料，写一篇关于认知 AI 的公众号文章。
 `;
+}
+
+function markdownSection(content, heading) {
+  const normalized = String(content || "").replace(/\r\n/g, "\n");
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^##\\s+${escaped}\\s*$`, "m");
+  const match = normalized.match(pattern);
+  if (!match) return "";
+  const start = match.index + match[0].length;
+  const next = normalized.slice(start).search(/^##\s+/m);
+  const end = next >= 0 ? start + next : normalized.length;
+  return normalized.slice(start, end).trim();
 }
 
 function parseLarkInboxTasks(markdown, options = {}) {
   const {
     status = "待处理",
     limit = 20,
+    section = "",
   } = options;
-  const content = String(markdown || "").replace(/\r\n/g, "\n");
+  const fullContent = String(markdown || "").replace(/\r\n/g, "\n");
+  const scoped = section ? markdownSection(fullContent, section) : "";
+  const content = scoped || fullContent;
   const headingRegex = /^###\s+(.+?)\s*$/gm;
   const taskStarts = [];
   let match;
@@ -240,6 +272,49 @@ ${body}
 
 ${block}
 `.trimEnd() + "\n";
+}
+
+function auditLarkInbox(markdown) {
+  const content = String(markdown || "").replace(/\r\n/g, "\n");
+  const pendingSection = markdownSection(content, "待处理");
+  const exampleSection = markdownSection(content, "示例区（不要执行）");
+  const pendingTasks = parseLarkInboxTasks(content, { status: "待处理", limit: 100, section: "待处理" });
+  const issues = [];
+  const warnings = [];
+
+  if (!/^##\s+手机填写区\s*$/m.test(content)) issues.push("缺少「手机填写区」二级标题。");
+  if (!/^##\s+待处理\s*$/m.test(content)) issues.push("缺少「待处理」二级标题。");
+  if (!/^##\s+已完成归档\s*$/m.test(content)) issues.push("缺少「已完成归档」二级标题。");
+  if (!/^##\s+示例区（不要执行）\s*$/m.test(content)) warnings.push("缺少「示例区（不要执行）」二级标题。");
+  if (!/资料来源[:：]/.test(markdownSection(content, "手机填写区"))) {
+    issues.push("手机填写区缺少「资料来源」字段。");
+  }
+  if (!/\[[^\]]+\]\(https?:\/\/[^)]+\)/.test(markdownSection(content, "已完成归档"))) {
+    warnings.push("已完成归档区缺少可点击的归档链接。");
+  }
+  if (/状态[:：]\s*已完成/.test(pendingSection) || /^结果[:：]/m.test(pendingSection)) {
+    issues.push("待处理区包含已完成状态或结果正文，应迁移到归档。");
+  }
+  if (/状态[:：]\s*待处理/.test(exampleSection)) {
+    issues.push("示例区包含「状态：待处理」，会被误识别为真实任务。");
+  }
+  if (/^##\s+已完成\s*$/m.test(content)) {
+    warnings.push("发现旧版「已完成」区，建议只保留「已完成归档」链接。");
+  }
+
+  return {
+    status: issues.length ? "fail" : warnings.length ? "warn" : "ok",
+    issues,
+    warnings,
+    pendingTaskCount: pendingTasks.length,
+    pendingTasks,
+    sections: {
+      hasMobileInput: /^##\s+手机填写区\s*$/m.test(content),
+      hasPending: /^##\s+待处理\s*$/m.test(content),
+      hasArchive: /^##\s+已完成归档\s*$/m.test(content),
+      hasExample: /^##\s+示例区（不要执行）\s*$/m.test(content),
+    },
+  };
 }
 
 function updateLarkInboxTask(markdown, title, result, options = {}) {
@@ -1622,9 +1697,10 @@ server.tool(
   {
     markdown: z.string(),
     status: z.string().default("待处理").describe("Task status to filter. Use empty string to return all statuses."),
+    section: z.string().default("").describe("Optional second-level heading to parse, e.g. 待处理."),
     limit: z.number().int().min(1).max(100).default(20),
   },
-  async ({ markdown, status, limit }) => json(parseLarkInboxTasks(markdown, { status, limit })),
+  async ({ markdown, status, section, limit }) => json(parseLarkInboxTasks(markdown, { status, section, limit })),
 );
 
 async function larkFetchMarkdown(doc) {
@@ -1689,7 +1765,22 @@ server.tool(
     return json({
       doc,
       status,
-      tasks: parseLarkInboxTasks(markdown, { status, limit }),
+      tasks: parseLarkInboxTasks(markdown, { status, limit, section: "待处理" }),
+    });
+  },
+);
+
+server.tool(
+  "lark_inbox_audit",
+  "Audit a Feishu AI instruction inbox document for mobile-friendly structure and parsing safety.",
+  {
+    doc: z.string().describe("Feishu document URL or token for the AI instruction inbox."),
+  },
+  async ({ doc }) => {
+    const markdown = await larkFetchMarkdown(doc);
+    return json({
+      doc,
+      ...auditLarkInbox(markdown),
     });
   },
 );
@@ -2068,7 +2159,7 @@ server.tool(
   },
   async ({ doc, limit, status }) => {
     const markdown = await larkFetchMarkdown(doc);
-    const tasks = parseLarkInboxTasks(markdown, { status, limit });
+    const tasks = parseLarkInboxTasks(markdown, { status, limit, section: "待处理" });
     const dispatches = tasks.map((task) => {
       const classification = classifyTaskText(`${task.title}\n${task.task}`);
       return {
