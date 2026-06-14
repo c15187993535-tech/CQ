@@ -197,7 +197,7 @@ tools_count=46（当时；当前工具总数见第 5 节）
 ```text
 打开飞书 AI 指令收件箱
 在“## 待处理”下面新增一个 “### 任务标题”
-填写 状态：待处理 / 优先级 / 任务
+填写 状态：待处理 / 资料来源 / 优先级 / 任务
 回到 Mac 后让 AI 执行 lark_inbox_fetch_pending
 AI 执行任务后用 lark_inbox_complete_task 写回结果并标记已完成
 ```

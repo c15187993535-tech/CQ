@@ -162,6 +162,7 @@ async function main() {
     const inboxTemplate = textResult(await client.callTool({ name: "lark_inbox_template", arguments: {} }));
     assert.match(inboxTemplate, /# AI 指令收件箱/);
     assert.match(inboxTemplate, /状态：待处理/);
+    assert.match(inboxTemplate, /资料来源：/);
 
     const inboxMarkdown = `# AI 指令收件箱
 
@@ -169,11 +170,13 @@ async function main() {
 
 写公众号
 状态：待处理
+资料来源：Obsidian + 飞书 + 联网
 任务：帮我写一篇关于认知 AI 的公众号文章。
 
 ### 整理今天日报
 状态：待处理
 优先级：高
+资料来源：Obsidian
 创建时间：2026-06-12 20:00:00
 任务：
 读取 Obsidian 今日笔记，生成日报。
@@ -197,9 +200,11 @@ async function main() {
     }));
     assert.equal(pendingTasks.length, 2);
     assert.equal(pendingTasks[0].title, "写公众号");
+    assert.equal(pendingTasks[0].sources, "Obsidian + 飞书 + 联网");
     assert.match(pendingTasks[0].task, /认知 AI/);
     assert.equal(pendingTasks[1].title, "整理今天日报");
     assert.equal(pendingTasks[1].priority, "高");
+    assert.equal(pendingTasks[1].sources, "Obsidian");
     assert.match(pendingTasks[1].task, /读取 Obsidian/);
 
     const allInboxTasks = parseJsonResult(await client.callTool({

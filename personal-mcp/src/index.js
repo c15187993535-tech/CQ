@@ -154,6 +154,7 @@ AI 执行后，把状态改为“已完成”，并写入结果。
 ### 示例任务
 状态：待处理
 优先级：中
+资料来源：Obsidian + 飞书
 任务：
 读取今天 Obsidian 日记，生成日报，写入 Obsidian，并同步到飞书。
 
@@ -192,9 +193,10 @@ function parseLarkInboxTasks(markdown, options = {}) {
     const body = content.slice(current.bodyStart, nextStart).trim();
     const statusMatch = body.match(/^状态[:：]\s*(.+?)\s*$/m);
     const priorityMatch = body.match(/^优先级[:：]\s*(.+?)\s*$/m);
+    const sourcesMatch = body.match(/^资料来源[:：]\s*(.+?)\s*$/m);
     const createdMatch = body.match(/^创建时间[:：]\s*(.+?)\s*$/m);
     const completedMatch = body.match(/^完成时间[:：]\s*(.+?)\s*$/m);
-    const taskMatch = body.match(/^任务[:：]\s*([\s\S]*?)(?=^结果[:：]|^完成时间[:：]|^状态[:：]|^优先级[:：]|^创建时间[:：]|^###\s+|\s*$)/m);
+    const taskMatch = body.match(/^任务[:：]\s*([\s\S]*?)(?=^结果[:：]|^完成时间[:：]|^状态[:：]|^优先级[:：]|^资料来源[:：]|^创建时间[:：]|^###\s+|\s*$)/m);
     const resultMatch = body.match(/^结果[:：]\s*([\s\S]*?)(?=^完成时间[:：]|^###\s+|\s*$)/m);
     const taskStatus = statusMatch?.[1]?.trim() || "";
     if (status && taskStatus !== status) continue;
@@ -203,6 +205,7 @@ function parseLarkInboxTasks(markdown, options = {}) {
       title: current.title,
       status: taskStatus,
       priority: priorityMatch?.[1]?.trim() || "",
+      sources: sourcesMatch?.[1]?.trim() || "",
       createdAt: createdMatch?.[1]?.trim() || "",
       completedAt: completedMatch?.[1]?.trim() || "",
       task: (taskMatch?.[1] || "").trim(),
@@ -223,6 +226,7 @@ function appendLarkInboxTask(markdown, task) {
   const block = `### ${title}
 状态：待处理
 优先级：${priority}
+资料来源：${task.sources?.trim() || "未指定"}
 创建时间：${createdAt}
 任务：
 ${body}
@@ -1698,10 +1702,11 @@ server.tool(
     title: z.string().min(1),
     task: z.string().min(1),
     priority: z.string().default("中"),
+    sources: z.string().default("未指定"),
   },
-  async ({ doc, title, task, priority }) => {
+  async ({ doc, title, task, priority, sources }) => {
     const markdown = await larkFetchMarkdown(doc);
-    const updated = appendLarkInboxTask(markdown, { title, task, priority });
+    const updated = appendLarkInboxTask(markdown, { title, task, priority, sources });
     const response = await larkOverwriteMarkdown(doc, updated);
     return json({
       ok: Boolean(response.ok),
