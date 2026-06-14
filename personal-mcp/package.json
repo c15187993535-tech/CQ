@@ -1,0 +1,22 @@
+{
+  "name": "personal-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "personal-mcp": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node ./src/index.js",
+    "google:auth-url": "node ./scripts/google-auth.js url",
+    "google:token": "node ./scripts/google-auth.js token",
+    "google:import-credentials": "node ./scripts/google-import-credentials.js",
+    "sync:outbox": "node ./scripts/sync-outbox.js",
+    "check": "node --check ./src/index.js && node --check ./scripts/google-auth.js && node --check ./scripts/google-import-credentials.js && node --check ./scripts/sync-outbox.js && node --check ./tests/run.mjs",
+    "test": "npm run check && node ./tests/run.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.0",
+    "zod": "^3.25.76"
+  }
+}
